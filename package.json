@@ -1,0 +1,13 @@
+{
+  "name": "grapenas",
+  "version": "0.1.0",
+  "description": "GrapeNAS 葡萄云 - 轻量 NAS 应用",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "panel": "electron panel"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

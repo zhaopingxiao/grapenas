@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>葡萄云 GrapeNAS</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 48 44" width="30" height="28" aria-hidden="true">
+        <rect x="22.5" y="0" width="3" height="9" rx="1.5" fill="#7c5a3a"/>
+        <ellipse cx="31" cy="5" rx="6" ry="3.2" fill="#4ade80" transform="rotate(-24 31 5)"/>
+        <circle cx="17" cy="15" r="6" fill="#a78bfa"/>
+        <circle cx="31" cy="15" r="6" fill="#8b5cf6"/>
+        <circle cx="11" cy="25" r="6" fill="#8b5cf6"/>
+        <circle cx="24" cy="25" r="6" fill="#7c3aed"/>
+        <circle cx="37" cy="25" r="6" fill="#8b5cf6"/>
+        <circle cx="17" cy="35" r="6" fill="#7c3aed"/>
+        <circle cx="31" cy="35" r="6" fill="#6d28d9"/>
+      </svg>
+      <span>葡萄云</span>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard">仪表盘</button>
+      <button class="nav-item" data-view="apps">应用</button>
+      <button class="nav-item" data-view="features">功能</button>
+      <button class="nav-item" data-view="settings">选项</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="connStatus" class="conn">连接中…</div>
+      <button id="logoutBtn" class="logout">退出登录</button>
+    </div>
+  </aside>
+
+  <!-- 手机端顶栏（桌面隐藏） -->
+  <div class="topbar">
+    <button id="menuBtn" class="menu-btn" aria-label="菜单">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></svg>
+    </button>
+    <span class="topbar-title">葡萄云</span>
+  </div>
+
+  <main class="content">
+    <!-- 仪表盘：系统信息 + 日志 -->
+    <section id="view-dashboard" class="view">
+      <div class="view-header">
+        <h2>仪表盘</h2>
+        <button id="refreshSys" class="btn">刷新</button>
+      </div>
+      <div id="sysCards" class="cards"></div>
+      <div class="view-header section-header">
+        <h3>日志</h3>
+        <button id="clearLogs" class="btn">清空</button>
+      </div>
+      <div id="logList" class="log-list"></div>
+    </section>
+
+    <!-- 应用 -->
+    <section id="view-apps" class="view hidden">
+      <div class="view-header">
+        <h2>应用</h2>
+        <button id="openAppModal" class="btn primary small">+ 添加应用</button>
+      </div>
+      <div id="appGrid" class="app-grid"></div>
+    </section>
+
+    <!-- 功能：子功能入口列表 -->
+    <section id="view-features" class="view hidden">
+      <div class="view-header">
+        <h2>功能</h2>
+      </div>
+      <ul class="menu-list">
+        <li class="menu-item" data-goto="proxy"><span>反向代理</span><span class="menu-arrow">›</span></li>
+      </ul>
+    </section>
+
+    <!-- 选项：设置分组入口列表 -->
+    <section id="view-settings" class="view hidden">
+      <div class="view-header">
+        <h2>选项</h2>
+      </div>
+      <ul class="menu-list">
+        <li class="menu-item menu-item-danger" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
+      </ul>
+    </section>
+
+    <!-- 安全设置：设置分组列表 -->
+    <section id="view-security" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs">
+          <button class="crumb" data-view="settings">选项</button>
+          <span class="crumb-sep">></span>
+          <span class="crumb-current">安全设置</span>
+        </div>
+      </div>
+      <ul class="menu-list">
+        <li class="menu-item" data-goto="accesscode"><span>访问码</span><span class="menu-arrow">›</span></li>
+      </ul>
+    </section>
+
+    <!-- 访问码 -->
+    <section id="view-accesscode" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs">
+          <button class="crumb" data-view="settings">选项</button>
+          <span class="crumb-sep">></span>
+          <button class="crumb" data-view="security">安全设置</button>
+          <span class="crumb-sep">></span>
+          <span class="crumb-current">访问码</span>
+        </div>
+      </div>
+      <div class="panel-card">
+        <p id="codeStatus" class="muted">读取中…</p>
+        <form id="changeCodeForm" class="form">
+          <label>当前访问码
+            <input id="oldCode" type="password" maxlength="8" inputmode="numeric" autocomplete="off" required>
+          </label>
+          <label>新访问码（8 位数字）
+            <input id="newCode" type="password" maxlength="8" inputmode="numeric" autocomplete="off" required>
+          </label>
+          <label>确认新访问码
+            <input id="newCode2" type="password" maxlength="8" inputmode="numeric" autocomplete="off" required>
+          </label>
+          <button class="btn primary" type="submit">修改访问码</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 反向代理 -->
+    <section id="view-proxy" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs">
+          <button class="crumb" data-view="features">功能</button>
+          <span class="crumb-sep">></span>
+          <span class="crumb-current">反向代理</span>
+        </div>
+        <button id="openProxyModal" class="btn primary small">+ 添加规则</button>
+      </div>
+      <p class="muted page-desc">将本机（localhost）指定端口的 Web 服务代理到子路径，WebSocket 同步映射，页面内的绝对路径资源与前端路由会自动适配。</p>
+      <ul id="proxyList" class="proxy-list"></ul>
+    </section>
+  </main>
+</div>
+<div class="nav-mask" id="navMask"></div>
+
+<!-- 弹窗：添加应用（拖入 tar 应用包） -->
+<div id="modalOverlay" class="modal-overlay hidden">
+  <div class="modal hidden" id="modalApp">
+    <h3>添加应用</h3>
+    <div id="dropZone" class="drop-zone">
+      <p>把应用包（.tar）拖到这里</p>
+      <p class="drop-or">或</p>
+      <button class="btn" id="browseBtn" type="button">选择文件</button>
+      <input type="file" id="fileInput" accept=".tar" hidden>
+    </div>
+    <div id="pkgPreview" class="hidden">
+      <div class="pkg-head">
+        <div id="pkgIconWrap" class="pkg-icon-wrap"></div>
+        <div class="pkg-meta">
+          <b id="pkgName"></b>
+          <div id="pkgId" class="pkg-id"></div>
+        </div>
+      </div>
+      <div id="pkgDesc" class="pkg-desc"></div>
+      <div class="form-actions">
+        <button class="btn primary" id="pkgInstallBtn">安装</button>
+        <button class="btn" id="pkgCancelBtn" type="button">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：应用设置 -->
+  <div class="modal hidden" id="modalAppSettings">
+    <h3>应用设置</h3>
+    <div class="pkg-head">
+      <div id="setIconWrap" class="pkg-icon-wrap"></div>
+      <div class="pkg-meta">
+        <b id="setName"></b>
+        <div id="setId" class="pkg-id"></div>
+      </div>
+    </div>
+    <div id="setDesc" class="pkg-desc"></div>
+    <div class="form-actions">
+      <button class="btn hidden" id="appStartStopBtn"></button>
+      <button class="btn danger" id="appUninstallBtn">卸载应用</button>
+      <button class="btn" id="appSettingsCloseBtn" type="button">关闭</button>
+    </div>
+  </div>
+
+  <!-- 弹窗：通用提示 -->
+  <div class="modal hidden" id="modalInfo">
+    <h3 id="infoTitle">提示</h3>
+    <p class="confirm-text" id="infoText"></p>
+    <div class="form-actions">
+      <button class="btn primary" id="infoOkBtn" type="button">知道了</button>
+    </div>
+  </div>
+
+  <!-- 弹窗：添加反向代理规则 -->
+  <div class="modal hidden" id="modalProxy">
+    <h3>添加反向代理规则</h3>
+    <form id="addProxyForm" class="form proxy-form">
+      <label>子路径
+        <input id="proxyPath" type="text" placeholder="/web" autocomplete="off" required>
+      </label>
+      <label>目标端口
+        <input id="proxyPort" type="number" min="1" max="65535" placeholder="80" required>
+      </label>
+      <div class="form-actions">
+        <button class="btn primary" type="submit">添加规则</button>
+        <button class="btn" type="button" id="proxyCancelBtn">取消</button>
+      </div>
+    </form>
+  </div>
+  <!-- 弹窗：重启确认 -->
+  <div class="modal hidden" id="modalConfirm">
+    <h3>重启葡萄云</h3>
+    <p class="confirm-text">确定要重启葡萄云服务吗？重启期间页面会短暂断开并自动重连。</p>
+    <div class="form-actions">
+      <button class="btn danger" id="confirmOkBtn">确定重启</button>
+      <button class="btn" id="confirmCancelBtn">取消</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>

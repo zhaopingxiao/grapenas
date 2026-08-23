@@ -1,0 +1,7 @@
+node_modules/
+data/
+.ground_progress
+dist/
+build/
+*.spec
+__pycache__/
