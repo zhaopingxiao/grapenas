@@ -9,7 +9,7 @@
 - **反向代理**：子路径 → 本机端口，HTTP + WebSocket 同步映射；自动改写 HTML 绝对路径、注入前端路由/WS 适配脚本、Referer 回退路由——**未改造的 SPA（如 opencode）也能直接跑在子路径下**
 - **应用管理（tar 应用包）**：拖拽安装应用包，磁贴式启动器，markdown 描述，WebUI 自动反代到 `/<id>`
 - **应用生命周期**：开机自动启动全部应用、重启后收养存活进程防重复启动、异常退出检测与日志、应用输出重定向到独立日志文件、Windows 下无窗口后台运行
-- **运维**：Windows 桌面面板（PyInstaller 打包 exe）、网页内一键重启（独立重启助手）、端口冲突友好提示
+- **运维**：网页内一键重启（独立重启助手）、端口冲突友好提示
 - **跨平台**：Windows / macOS / Linux 全分支适配（进程管理、端口探测、脚本执行）
 - **移动端**：响应式布局、抽屉导航、分格访问码输入
 
@@ -19,7 +19,6 @@
 |---|---|
 | 运行时 | Node.js（仅依赖 `ws` 一个包） |
 | 前端 | 原生 HTML/CSS/JS，无框架无构建 |
-| 面板 | Python 3 + tkinter（可选，PyInstaller 打包） |
 | 应用包 | tar + node 脚本约定 |
 
 ## 快速开始
@@ -30,16 +29,6 @@ npm start
 ```
 
 打开 <http://localhost:9643>，首次访问会要求设置 8 位访问码（此后每次访问都需要输入）。
-
-### Windows 面板（可选）
-
-双击 `dist/grapepanel.exe` 即可：启动/停止葡萄云、查看运行状态、打开管理页面（后台无窗口运行）。
-
-重新打包面板：
-
-```bash
-python -m PyInstaller --noconsole --onefile --name grapepanel panelwindows.pyw
-```
 
 macOS / Linux 直接 `npm start` 或 `nohup node server/index.js &`。
 
@@ -97,9 +86,7 @@ grapenas/
 │   ├── logger.js          # 内存环形日志 + 订阅推送
 │   └── util.js
 ├── web/                   # 前端（单壳页面，无构建）
-├── panelwindows.pyw       # Windows 面板源码
-├── restart_helper.js      # 网页"重启葡萄云"的独立助手
-└── dist/grapepanel.exe    # 面板可执行文件（构建产物）
+└── restart_helper.js      # 网页"重启葡萄云"的独立助手
 ```
 
 ## 数据与安全
