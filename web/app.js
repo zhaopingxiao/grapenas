@@ -349,10 +349,11 @@ function renderFilesCrumbs() {
     const parts = filesPath.split('/');
     let cur = '';
     parts.forEach((part, i) => {
-      cur = cur ? cur + '/' + part : part;
+      const segPath = cur ? cur + '/' + part : part; // 每段捕获自己的路径（闭包陷阱）
+      cur = segPath;
       const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
       if (i === parts.length - 1) segs.push({ label, current: true });
-      else segs.push({ label, click: () => { filesPath = cur; loadFilesView(); } });
+      else segs.push({ label, click: () => { filesPath = segPath; loadFilesView(); } });
     });
   }
   renderCrumbs(document.getElementById('filesCrumbs'), segs);
@@ -536,10 +537,11 @@ function buildMoveCopyCrumbs() {
     const parts = mcPath.split('/');
     let cur = '';
     parts.forEach((part, i) => {
-      cur = cur ? cur + '/' + part : part;
+      const segPath = cur ? cur + '/' + part : part; // 每段捕获自己的路径（闭包陷阱）
+      cur = segPath;
       const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
       if (i === parts.length - 1) segs.push({ label, current: true });
-      else segs.push({ label, click: () => { mcPath = cur; loadMoveCopyDirs(); } });
+      else segs.push({ label, click: () => { mcPath = segPath; loadMoveCopyDirs(); } });
     });
   }
   return segs;
