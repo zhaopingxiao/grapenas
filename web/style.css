@@ -367,6 +367,10 @@ body {
 .file-empty { padding: 18px; color: #a89ecf; font-size: 13px; }
 .error-mini { color: #f87171; font-size: 13px; min-height: 18px; margin-top: 10px; }
 
+/* 面包屑折叠弹窗列表 */
+.crumb-modal-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.crumb-modal-list .menu-item { justify-content: flex-start; padding: 12px 16px; }
+
 /* 存储位置强制配置遮罩 */
 .storage-overlay {
   position: fixed;
@@ -414,6 +418,8 @@ body {
   gap: 8px;
   font-size: 22px;
   letter-spacing: 2px;
+  min-width: 0; /* 允许收缩，超出时折叠为"…" */
+  overflow: hidden;
 }
 .crumb {
   background: none;

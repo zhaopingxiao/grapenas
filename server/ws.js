@@ -11,7 +11,7 @@ import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
 import { checkApp, startApp, stopApp, markAppStopping, syncAppProxyRules, removeAppProxyRules, appHasWebui, uninstallApp } from './apps.js';
-import { isStorageConfigured, getStoragePath, resolveStoragePath, setStoragePath } from './storage.js';
+import { isStorageConfigured, getStoragePath, resolveStoragePath, setStoragePath, moveEntry, copyEntry } from './storage.js';
 
 export const COOKIE_NAME = 'grapenas_token';
 
@@ -327,6 +327,29 @@ const handlers = {
     fs.rmSync(target, { recursive: true, force: true });
     log('info', `文件管理已删除: ${data.path}`);
     return { deleted: true };
+  },
+
+  'files.move': (data) => {
+    const from = resolveStoragePath(data.from);
+    const to = resolveStoragePath(data.to);
+    const dest = path.join(to, path.basename(from));
+    if (dest === from) throw new Error('目标位置与当前位置相同');
+    if (dest.startsWith(from + path.sep)) throw new Error('不能移动到自身内部');
+    if (fs.existsSync(dest)) throw new Error(`目标位置已存在「${path.basename(from)}」`);
+    moveEntry(from, dest);
+    log('info', `文件管理移动: ${data.from} -> ${data.to}`);
+    return { moved: true };
+  },
+
+  'files.copy': (data) => {
+    const from = resolveStoragePath(data.from);
+    const to = resolveStoragePath(data.to);
+    const dest = path.join(to, path.basename(from));
+    if (dest === from) throw new Error('目标位置与当前位置相同');
+    if (dest.startsWith(from + path.sep)) throw new Error('不能复制到自身内部');
+    if (fs.existsSync(dest)) throw new Error(`目标位置已存在「${path.basename(from)}」`);
+    copyEntry(from, dest);
+    return { copied: true };
   },
 };
 

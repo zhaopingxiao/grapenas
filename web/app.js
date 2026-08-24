@@ -103,6 +103,8 @@ const VIEW_LOADERS = {
   apps: loadApps,
   accesscode: loadAccessCode,
   proxy: loadProxyView,
+  security: loadSecurityView,
+  storagesettings: loadStorageSettingsView,
   storagelocation: loadStorageLocation,
 };
 
@@ -178,6 +180,72 @@ function appendLog(entry) {
   list.scrollTop = list.scrollHeight;
 }
 
+// ---------- 面包屑（统一渲染 + 溢出折叠） ----------
+// segments: [{ label, click?, current? }]
+
+function renderCrumbs(el, segments) {
+  const build = (list) => {
+    el.innerHTML = '';
+    list.forEach((seg, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'crumb-sep';
+        sep.textContent = '>';
+        el.appendChild(sep);
+      }
+      if (seg.current) {
+        const c = document.createElement('span');
+        c.className = 'crumb-current';
+        c.textContent = seg.label;
+        el.appendChild(c);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'crumb';
+        b.type = 'button';
+        b.textContent = seg.label;
+        b.addEventListener('click', seg.click);
+        el.appendChild(b);
+      }
+    });
+  };
+  build(segments);
+  // 屏幕放不下时折叠中间段为"…"，点击弹窗选择前往位置
+  if (segments.length > 3 && el.scrollWidth > el.clientWidth + 2) {
+    const first = segments[0];
+    const secondLast = segments[segments.length - 2];
+    const last = segments[segments.length - 1];
+    const collapsed = segments.slice(1, -2);
+    const shown = [first];
+    if (collapsed.length) {
+      shown.push({
+        label: '…',
+        click: () => openCrumbsModal(segments),
+      });
+    }
+    shown.push(secondLast, last);
+    build(shown);
+  }
+}
+
+function openCrumbsModal(segments) {
+  const list = document.getElementById('breadcrumbList');
+  list.innerHTML = '';
+  segments.forEach((seg) => {
+    if (seg.current) return;
+    const btn = document.createElement('button');
+    btn.className = 'menu-item';
+    const span = document.createElement('span');
+    span.textContent = seg.label;
+    btn.appendChild(span);
+    btn.addEventListener('click', () => {
+      closeModal();
+      seg.click();
+    });
+    list.appendChild(btn);
+  });
+  openModal('modalBreadcrumb');
+}
+
 // ---------- 存储位置 ----------
 
 async function checkStorageConfig() {
@@ -190,6 +258,11 @@ async function checkStorageConfig() {
 }
 
 async function loadStorageLocation() {
+  renderCrumbs(document.getElementById('crumbsStoragelocation'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '存储设置', click: () => switchView('storagesettings') },
+    { label: '存储位置', current: true },
+  ]);
   try {
     const s = await call('storage.get');
     document.getElementById('storageStatus').textContent = s.configured
@@ -198,6 +271,21 @@ async function loadStorageLocation() {
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+// 安全设置 / 存储设置 列表页：渲染面包屑
+function loadSecurityView() {
+  renderCrumbs(document.getElementById('crumbsSecurity'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '安全设置', current: true },
+  ]);
+}
+
+function loadStorageSettingsView() {
+  renderCrumbs(document.getElementById('crumbsStoragesettings'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '存储设置', current: true },
+  ]);
 }
 
 async function submitStoragePath(inputId, errorId) {
@@ -224,8 +312,8 @@ async function loadFilesView() {
     content.innerHTML = '';
     const ul = document.createElement('ul');
     ul.className = 'menu-list';
-    ul.appendChild(makeFilesEntry('user', '我的文件', '存储位置的 user/ 目录'));
-    ul.appendChild(makeFilesEntry('.package', '应用文件', '存储位置的 .package/ 目录（应用数据）'));
+    ul.appendChild(makeFilesEntry('user', '我的文件'));
+    ul.appendChild(makeFilesEntry('.package', '应用文件'));
     content.appendChild(ul);
     return;
   }
@@ -237,16 +325,13 @@ async function loadFilesView() {
   }
 }
 
-function makeFilesEntry(rel, label, desc) {
+function makeFilesEntry(rel, label) {
   const li = document.createElement('li');
   li.className = 'menu-item';
   const span = document.createElement('span');
   const b = document.createElement('b');
   b.textContent = label;
-  const d = document.createElement('span');
-  d.className = 'muted-inline';
-  d.textContent = ' · ' + desc;
-  span.append(b, d);
+  span.appendChild(b);
   const arrow = document.createElement('span');
   arrow.className = 'menu-arrow';
   arrow.textContent = '›';
@@ -259,46 +344,18 @@ function makeFilesEntry(rel, label, desc) {
 }
 
 function renderFilesCrumbs() {
-  const el = document.getElementById('filesCrumbs');
-  el.innerHTML = '';
-  const root = document.createElement('button');
-  root.className = 'crumb';
-  root.textContent = '文件管理';
-  root.addEventListener('click', () => {
-    filesPath = null;
-    loadFilesView();
-  });
-  el.appendChild(root);
-  if (filesPath === null) return;
-  const sep = document.createElement('span');
-  sep.className = 'crumb-sep';
-  sep.textContent = '>';
-  el.appendChild(sep);
-  const parts = filesPath.split('/');
-  let cur = '';
-  parts.forEach((part, i) => {
-    cur = cur ? cur + '/' + part : part;
-    const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
-    if (i === parts.length - 1) {
-      const c = document.createElement('span');
-      c.className = 'crumb-current';
-      c.textContent = label;
-      el.appendChild(c);
-    } else {
-      const btn = document.createElement('button');
-      btn.className = 'crumb';
-      btn.textContent = label;
-      btn.addEventListener('click', () => {
-        filesPath = cur;
-        loadFilesView();
-      });
-      el.appendChild(btn);
-      const s2 = document.createElement('span');
-      s2.className = 'crumb-sep';
-      s2.textContent = '>';
-      el.appendChild(s2);
-    }
-  });
+  const segs = [{ label: '文件管理', click: () => { filesPath = null; loadFilesView(); } }];
+  if (filesPath !== null) {
+    const parts = filesPath.split('/');
+    let cur = '';
+    parts.forEach((part, i) => {
+      cur = cur ? cur + '/' + part : part;
+      const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
+      if (i === parts.length - 1) segs.push({ label, current: true });
+      else segs.push({ label, click: () => { filesPath = cur; loadFilesView(); } });
+    });
+  }
+  renderCrumbs(document.getElementById('filesCrumbs'), segs);
 }
 
 const FILE_ICON =
@@ -380,6 +437,16 @@ function renderFilesBrowser(content, entries) {
     meta.textContent = e.dir ? '目录' : `${formatBytes(e.size)} · ${new Date(e.mtime).toLocaleString()}`;
     const actions = document.createElement('span');
     actions.className = 'file-actions';
+    const mv = document.createElement('button');
+    mv.className = 'btn small';
+    mv.textContent = '移动';
+    mv.addEventListener('click', () => openMoveCopy('move', filesRel(e.name)));
+    actions.appendChild(mv);
+    const cp = document.createElement('button');
+    cp.className = 'btn small';
+    cp.textContent = '复制';
+    cp.addEventListener('click', () => openMoveCopy('copy', filesRel(e.name)));
+    actions.appendChild(cp);
     if (!e.dir) {
       const dl = document.createElement('a');
       dl.className = 'btn small';
@@ -414,9 +481,78 @@ function renderFilesBrowser(content, entries) {
   content.appendChild(list);
 }
 
+// ---------- 移动 / 复制 ----------
+
+let mcAction = 'move';
+let mcFrom = null;
+let mcPath = ''; // 目标目录（存储内相对路径）
+
+function openMoveCopy(action, rel) {
+  mcAction = action;
+  mcFrom = rel;
+  mcPath = '';
+  document.getElementById('moveCopyTitle').textContent = action === 'move' ? '移动到' : '复制到';
+  document.getElementById('moveCopySource').textContent = rel;
+  document.getElementById('moveCopyConfirmBtn').textContent = action === 'move' ? '移动到这里' : '复制到这里';
+  openModal('modalMoveCopy');
+  loadMoveCopyDirs();
+}
+
+async function loadMoveCopyDirs() {
+  renderCrumbs(document.getElementById('moveCopyCrumbs'), buildMoveCopyCrumbs());
+  try {
+    const data = await call('files.list', { path: mcPath });
+    const list = document.getElementById('moveCopyDirs');
+    list.innerHTML = '';
+    const dirs = data.entries.filter((e) => e.dir);
+    if (!dirs.length) {
+      list.innerHTML = '<p class="file-empty">此文件夹下没有子目录</p>';
+      return;
+    }
+    for (const e of dirs) {
+      const row = document.createElement('div');
+      row.className = 'file-row is-dir';
+      const icon = document.createElement('span');
+      icon.className = 'file-icon';
+      icon.innerHTML = DIR_ICON;
+      const name = document.createElement('span');
+      name.className = 'file-name';
+      name.textContent = e.name;
+      row.append(icon, name);
+      row.addEventListener('click', () => {
+        mcPath = mcPath ? mcPath + '/' + e.name : e.name;
+        loadMoveCopyDirs();
+      });
+      list.appendChild(row);
+    }
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function buildMoveCopyCrumbs() {
+  const segs = [{ label: '存储根', click: () => { mcPath = ''; loadMoveCopyDirs(); } }];
+  if (mcPath) {
+    const parts = mcPath.split('/');
+    let cur = '';
+    parts.forEach((part, i) => {
+      cur = cur ? cur + '/' + part : part;
+      const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
+      if (i === parts.length - 1) segs.push({ label, current: true });
+      else segs.push({ label, click: () => { mcPath = cur; loadMoveCopyDirs(); } });
+    });
+  }
+  return segs;
+}
+
 // ---------- 访问码 ----------
 
 async function loadAccessCode() {
+  renderCrumbs(document.getElementById('crumbsAccesscode'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '安全设置', click: () => switchView('security') },
+    { label: '访问码', current: true },
+  ]);
   try {
     const s = await call('settings.get');
     document.getElementById('codeStatus').textContent = s.accessCodeSet
@@ -775,6 +911,23 @@ document.getElementById('storagePageForm').addEventListener('submit', (e) => {
   e.preventDefault();
   submitStoragePath('storagePageInput', 'storagePageError');
 });
+
+// ---- 面包屑折叠弹窗 ----
+document.getElementById('breadcrumbCloseBtn').addEventListener('click', closeModal);
+
+// ---- 移动 / 复制 ----
+document.getElementById('moveCopyConfirmBtn').addEventListener('click', async () => {
+  try {
+    if (mcAction === 'move') await call('files.move', { from: mcFrom, to: mcPath });
+    else await call('files.copy', { from: mcFrom, to: mcPath });
+    toast(mcAction === 'move' ? '移动完成' : '复制完成');
+    closeModal();
+    loadFilesView();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+document.getElementById('moveCopyCancelBtn').addEventListener('click', closeModal);
 
 // 手机端抽屉菜单：三条杠开合，遮罩点击收起，回到桌面尺寸时清理状态
 document.getElementById('menuBtn').addEventListener('click', () => {

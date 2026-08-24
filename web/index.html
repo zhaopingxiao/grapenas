@@ -71,11 +71,7 @@
     <!-- 存储设置 -->
     <section id="view-storagesettings" class="view hidden">
       <div class="view-header">
-        <div class="crumbs">
-          <button class="crumb" data-view="settings">选项</button>
-          <span class="crumb-sep">></span>
-          <span class="crumb-current">存储设置</span>
-        </div>
+        <div class="crumbs" id="crumbsStoragesettings"></div>
       </div>
       <ul class="menu-list">
         <li class="menu-item" data-goto="storagelocation"><span>存储位置</span><span class="menu-arrow">›</span></li>
@@ -85,13 +81,7 @@
     <!-- 存储位置 -->
     <section id="view-storagelocation" class="view hidden">
       <div class="view-header">
-        <div class="crumbs">
-          <button class="crumb" data-view="settings">选项</button>
-          <span class="crumb-sep">></span>
-          <button class="crumb" data-view="storagesettings">存储设置</button>
-          <span class="crumb-sep">></span>
-          <span class="crumb-current">存储位置</span>
-        </div>
+        <div class="crumbs" id="crumbsStoragelocation"></div>
       </div>
       <div class="panel-card">
         <p id="storageStatus" class="muted">读取中…</p>
@@ -99,7 +89,6 @@
           <label>新的存储位置
             <input id="storagePageInput" type="text" autocomplete="off" required>
           </label>
-          <p class="muted">重新设置会把当前存储位置的数据迁移到新位置；首次配置会自动迁入历史应用数据。</p>
           <button class="btn primary" type="submit">保存并迁移</button>
         </form>
         <p class="error-mini" id="storagePageError"></p>
@@ -140,11 +129,7 @@
     <!-- 安全设置：设置分组列表 -->
     <section id="view-security" class="view hidden">
       <div class="view-header">
-        <div class="crumbs">
-          <button class="crumb" data-view="settings">选项</button>
-          <span class="crumb-sep">></span>
-          <span class="crumb-current">安全设置</span>
-        </div>
+        <div class="crumbs" id="crumbsSecurity"></div>
       </div>
       <ul class="menu-list">
         <li class="menu-item" data-goto="accesscode"><span>访问码</span><span class="menu-arrow">›</span></li>
@@ -154,13 +139,7 @@
     <!-- 访问码 -->
     <section id="view-accesscode" class="view hidden">
       <div class="view-header">
-        <div class="crumbs">
-          <button class="crumb" data-view="settings">选项</button>
-          <span class="crumb-sep">></span>
-          <button class="crumb" data-view="security">安全设置</button>
-          <span class="crumb-sep">></span>
-          <span class="crumb-current">访问码</span>
-        </div>
+        <div class="crumbs" id="crumbsAccesscode"></div>
       </div>
       <div class="panel-card">
         <p id="codeStatus" class="muted">读取中…</p>
@@ -200,10 +179,10 @@
 <div id="storageOverlay" class="storage-overlay hidden">
   <div class="modal">
     <h3>设置存储位置</h3>
-    <p class="confirm-text">首次使用需要配置存储位置：<b>我的文件</b>存放于其中的 <code>user/</code> 目录，<b>应用数据</b>存放于 <code>.package/</code> 目录。</p>
+    <p class="confirm-text">首次使用需要设置存储位置。</p>
     <form id="storageForm" class="form">
       <label>存储位置
-        <input id="storagePathInput" type="text" placeholder="例如 D:\nas-data" autocomplete="off" required>
+        <input id="storagePathInput" type="text" autocomplete="off" required>
       </label>
       <button class="btn primary" type="submit">保存并进入</button>
     </form>
@@ -261,6 +240,27 @@
     <p class="confirm-text" id="infoText"></p>
     <div class="form-actions">
       <button class="btn primary" id="infoOkBtn" type="button">知道了</button>
+    </div>
+  </div>
+
+  <!-- 弹窗：面包屑折叠选择 -->
+  <div class="modal hidden" id="modalBreadcrumb">
+    <h3>前往</h3>
+    <div id="breadcrumbList" class="crumb-modal-list"></div>
+    <div class="form-actions">
+      <button class="btn" id="breadcrumbCloseBtn" type="button">关闭</button>
+    </div>
+  </div>
+
+  <!-- 弹窗：移动/复制目标选择 -->
+  <div class="modal hidden" id="modalMoveCopy">
+    <h3 id="moveCopyTitle">移动</h3>
+    <p class="muted" id="moveCopySource"></p>
+    <div class="crumbs" id="moveCopyCrumbs"></div>
+    <div id="moveCopyDirs" class="file-list"></div>
+    <div class="form-actions">
+      <button class="btn primary" id="moveCopyConfirmBtn">移动到这里</button>
+      <button class="btn" id="moveCopyCancelBtn" type="button">取消</button>
     </div>
   </div>
 

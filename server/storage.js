@@ -48,7 +48,7 @@ function ensureLayout(root) {
 }
 
 // 跨卷移动：rename 失败（EXDEV）时复制+删除
-function moveEntry(src, dest) {
+export function moveEntry(src, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   try {
     fs.renameSync(src, dest);
@@ -57,6 +57,11 @@ function moveEntry(src, dest) {
     fs.cpSync(src, dest, { recursive: true });
     fs.rmSync(src, { recursive: true, force: true });
   }
+}
+
+export function copyEntry(src, dest) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.cpSync(src, dest, { recursive: true });
 }
 
 // 迁移已安装应用的 dir/script/command 到新包目录

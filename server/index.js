@@ -238,7 +238,14 @@ async function handleRequest(req, res) {
     try {
       const fp = resolveStoragePath(url.searchParams.get('path'));
       if (!fs.statSync(fp).isFile()) throw new Error('不是文件');
-      return serveFile(res, fp);
+      // 强制下载（可预览的文件类型也一律附件下载）
+      const name = encodeURIComponent(path.basename(fp));
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename*=UTF-8''${name}`,
+      });
+      fs.createReadStream(fp).pipe(res);
+      return;
     } catch {
       return sendJson(res, 404, { ok: false, error: '文件不存在' });
     }
