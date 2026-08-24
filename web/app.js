@@ -441,12 +441,18 @@ function renderFilesBrowser(content, entries) {
     const mv = document.createElement('button');
     mv.className = 'btn small';
     mv.textContent = '移动';
-    mv.addEventListener('click', () => openMoveCopy('move', filesRel(e.name)));
+    mv.addEventListener('click', (ev) => {
+      ev.stopPropagation(); // 防止目录行的"进入目录"点击触发
+      openMoveCopy('move', filesRel(e.name));
+    });
     actions.appendChild(mv);
     const cp = document.createElement('button');
     cp.className = 'btn small';
     cp.textContent = '复制';
-    cp.addEventListener('click', () => openMoveCopy('copy', filesRel(e.name)));
+    cp.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      openMoveCopy('copy', filesRel(e.name));
+    });
     actions.appendChild(cp);
     if (!e.dir) {
       const dl = document.createElement('a');
@@ -460,7 +466,8 @@ function renderFilesBrowser(content, entries) {
     const del = document.createElement('button');
     del.className = 'btn small danger-text';
     del.textContent = '删除';
-    del.addEventListener('click', async () => {
+    del.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
       if (!confirm(`确定删除「${e.name}」？${e.dir ? '目录内容将一并删除。' : ''}`)) return;
       try {
         await call('files.delete', { path: filesRel(e.name) });
@@ -502,8 +509,15 @@ function openMoveCopy(action, rel) {
 async function loadMoveCopyDirs() {
   renderCrumbs(document.getElementById('moveCopyCrumbs'), buildMoveCopyCrumbs());
   try {
-    const data = await call('files.list', { path: mcPath });
     const list = document.getElementById('moveCopyDirs');
+    if (mcPath === '') {
+      // 根：显示"我的文件 / 应用文件"两个入口（与文件管理一致）
+      list.innerHTML = '';
+      list.appendChild(makeMoveCopyEntry('user', '我的文件'));
+      list.appendChild(makeMoveCopyEntry('.package', '应用文件'));
+      return;
+    }
+    const data = await call('files.list', { path: mcPath });
     list.innerHTML = '';
     const dirs = data.entries.filter((e) => e.dir);
     if (!dirs.length) {
@@ -529,6 +543,23 @@ async function loadMoveCopyDirs() {
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+function makeMoveCopyEntry(rel, label) {
+  const row = document.createElement('div');
+  row.className = 'file-row is-dir';
+  const icon = document.createElement('span');
+  icon.className = 'file-icon';
+  icon.innerHTML = DIR_ICON;
+  const name = document.createElement('span');
+  name.className = 'file-name';
+  name.textContent = label;
+  row.append(icon, name);
+  row.addEventListener('click', () => {
+    mcPath = rel;
+    loadMoveCopyDirs();
+  });
+  return row;
 }
 
 function buildMoveCopyCrumbs() {

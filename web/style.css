@@ -227,7 +227,7 @@ body {
   white-space: nowrap;
   text-align: center;
 }
-/* 右上角小齿轮（webui 应用 hover 显示；触屏常显） */
+/* 右上角小齿轮（所有磁贴 hover 显示，保证设置入口可达；触屏常显） */
 .tile-gear {
   position: absolute;
   top: -6px;
@@ -243,7 +243,7 @@ body {
   justify-content: center;
   cursor: pointer;
 }
-.app-tile.has-webui:hover .tile-gear { display: inline-flex; }
+.app-tile:hover .tile-gear { display: inline-flex; }
 .tile-gear:hover { background: rgba(139, 92, 246, 0.35); }
 @media (hover: none) { .tile-gear { display: inline-flex; } }
 /* 无 webui：hover 中央大齿轮 */
