@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { getApps, getApp, addApp, removeApp, getProxies, addProxy, removeProxy, PORT } from './config.js';
 import { log } from './logger.js';
 import { isReservedPath } from './proxy.js';
+import { packagesDir, isStorageConfigured } from './storage.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PROGRESS_PATH = path.join(ROOT, '.ground_progress');
-const PACKAGES_DIR = path.join(ROOT, 'data', 'packages');
 const TMP_DIR = path.join(ROOT, 'data', 'tmp');
 const APP_LOG_DIR = path.join(ROOT, 'data', 'logs');
 
@@ -212,6 +212,10 @@ export async function stopApp(id) {
 
 // 服务启动时：按核对逻辑启动所有应用（已存活的跳过，不重复启动）
 export function ensureAppsRunning() {
+  if (!isStorageConfigured()) {
+    log('warn', '尚未配置存储位置，跳过应用启动');
+    return;
+  }
   for (const app of getApps()) {
     try {
       startApp(app);
@@ -380,11 +384,13 @@ export async function stageTar(buffer) {
   return { token, meta: { ...info, iconDataUri } };
 }
 
-// 安装已暂存的 tar：完整解压到 data/packages/<id>，登记应用并自启动
+// 安装已暂存的 tar：完整解压到 <存储位置>/.package/<id>，登记应用并自启动
 export async function installStagedTar(token) {
   if (!/^[a-f0-9]{24}$/.test(String(token))) throw new Error('无效的安装凭证');
   const tarPath = path.join(TMP_DIR, `${token}.tar`);
   if (!fs.existsSync(tarPath)) throw new Error('安装凭证已过期，请重新上传');
+  const packagesRoot = packagesDir();
+  if (!packagesRoot) throw new Error('尚未配置存储位置，请先在 选项 > 存储设置 > 存储位置 配置');
 
   // 先读 config.json 拿 id
   const peekDir = path.join(TMP_DIR, `peek-${token}`);
@@ -398,7 +404,7 @@ export async function installStagedTar(token) {
   }
 
   // 完整解压到包目录
-  const pkgDir = path.join(PACKAGES_DIR, info.id);
+  const pkgDir = path.join(packagesRoot, info.id);
   await fs.promises.rm(pkgDir, { recursive: true, force: true }).catch(() => {});
   await tarExtract(tarPath, pkgDir);
   await fs.promises.rm(tarPath, { force: true }).catch(() => {}); // 清理暂存 tar

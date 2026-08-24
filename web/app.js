@@ -40,6 +40,7 @@ function connect() {
     state.connected = true;
     updateConnStatus();
     refreshCurrentView();
+    checkStorageConfig();
   };
 
   ws.onmessage = (e) => {
@@ -98,20 +99,25 @@ function updateConnStatus() {
 
 const VIEW_LOADERS = {
   dashboard: loadDashboard,
+  files: loadFilesView,
   apps: loadApps,
   accesscode: loadAccessCode,
   proxy: loadProxyView,
+  storagelocation: loadStorageLocation,
 };
 
 // 子页面归属的顶级导航项（高亮用）
 const NAV_OF = {
   dashboard: 'dashboard',
+  files: 'files',
   apps: 'apps',
   features: 'features',
   proxy: 'features', // 反向代理属于"功能"
   settings: 'settings',
   security: 'settings', // 安全设置属于"设置"
   accesscode: 'settings', // 访问码属于"设置 > 安全设置"
+  storagesettings: 'settings',
+  storagelocation: 'settings',
 };
 
 function switchView(view) {
@@ -170,6 +176,242 @@ function appendLog(entry) {
   div.querySelector('.log-msg').textContent = entry.message;
   list.appendChild(div);
   list.scrollTop = list.scrollHeight;
+}
+
+// ---------- 存储位置 ----------
+
+async function checkStorageConfig() {
+  try {
+    const s = await call('storage.get');
+    document.getElementById('storageOverlay').classList.toggle('hidden', s.configured);
+  } catch {
+    /* 连接未就绪时忽略 */
+  }
+}
+
+async function loadStorageLocation() {
+  try {
+    const s = await call('storage.get');
+    document.getElementById('storageStatus').textContent = s.configured
+      ? `当前存储位置：${s.path}`
+      : '尚未配置存储位置';
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function submitStoragePath(inputId, errorId) {
+  const p = document.getElementById(inputId).value.trim();
+  const errEl = document.getElementById(errorId);
+  errEl.textContent = '';
+  try {
+    await call('storage.set', { path: p });
+    toast('存储位置已设置');
+    location.reload();
+  } catch (err) {
+    errEl.textContent = err.message;
+  }
+}
+
+// ---------- 文件管理 ----------
+
+let filesPath = null; // null = 根（我的文件/应用文件），否则为存储内相对路径
+
+async function loadFilesView() {
+  renderFilesCrumbs();
+  const content = document.getElementById('filesContent');
+  if (filesPath === null) {
+    content.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.className = 'menu-list';
+    ul.appendChild(makeFilesEntry('user', '我的文件', '存储位置的 user/ 目录'));
+    ul.appendChild(makeFilesEntry('.package', '应用文件', '存储位置的 .package/ 目录（应用数据）'));
+    content.appendChild(ul);
+    return;
+  }
+  try {
+    const data = await call('files.list', { path: filesPath });
+    renderFilesBrowser(content, data.entries);
+  } catch (err) {
+    content.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function makeFilesEntry(rel, label, desc) {
+  const li = document.createElement('li');
+  li.className = 'menu-item';
+  const span = document.createElement('span');
+  const b = document.createElement('b');
+  b.textContent = label;
+  const d = document.createElement('span');
+  d.className = 'muted-inline';
+  d.textContent = ' · ' + desc;
+  span.append(b, d);
+  const arrow = document.createElement('span');
+  arrow.className = 'menu-arrow';
+  arrow.textContent = '›';
+  li.append(span, arrow);
+  li.addEventListener('click', () => {
+    filesPath = rel;
+    loadFilesView();
+  });
+  return li;
+}
+
+function renderFilesCrumbs() {
+  const el = document.getElementById('filesCrumbs');
+  el.innerHTML = '';
+  const root = document.createElement('button');
+  root.className = 'crumb';
+  root.textContent = '文件管理';
+  root.addEventListener('click', () => {
+    filesPath = null;
+    loadFilesView();
+  });
+  el.appendChild(root);
+  if (filesPath === null) return;
+  const sep = document.createElement('span');
+  sep.className = 'crumb-sep';
+  sep.textContent = '>';
+  el.appendChild(sep);
+  const parts = filesPath.split('/');
+  let cur = '';
+  parts.forEach((part, i) => {
+    cur = cur ? cur + '/' + part : part;
+    const label = part === 'user' ? '我的文件' : part === '.package' ? '应用文件' : part;
+    if (i === parts.length - 1) {
+      const c = document.createElement('span');
+      c.className = 'crumb-current';
+      c.textContent = label;
+      el.appendChild(c);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'crumb';
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        filesPath = cur;
+        loadFilesView();
+      });
+      el.appendChild(btn);
+      const s2 = document.createElement('span');
+      s2.className = 'crumb-sep';
+      s2.textContent = '>';
+      el.appendChild(s2);
+    }
+  });
+}
+
+const FILE_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM13 9V3.5L18.5 9H13z"/></svg>';
+const DIR_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>';
+
+function filesRel(name) {
+  return filesPath ? filesPath + '/' + name : name;
+}
+
+function renderFilesBrowser(content, entries) {
+  content.innerHTML = '';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'file-toolbar';
+  const up = document.createElement('button');
+  up.className = 'btn small';
+  up.textContent = '上传文件';
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  up.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    for (const f of fileInput.files) {
+      try {
+        const res = await fetch(
+          '/api/files/upload?path=' + encodeURIComponent(filesPath || '') + '&name=' + encodeURIComponent(f.name),
+          { method: 'POST', body: f }
+        );
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || '上传失败');
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+    fileInput.value = '';
+    loadFilesView();
+  });
+  const mk = document.createElement('button');
+  mk.className = 'btn small';
+  mk.textContent = '新建文件夹';
+  mk.addEventListener('click', async () => {
+    const name = prompt('文件夹名称');
+    if (!name) return;
+    try {
+      await call('files.mkdir', { path: filesPath, name });
+      loadFilesView();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  const rf = document.createElement('button');
+  rf.className = 'btn small';
+  rf.textContent = '刷新';
+  rf.addEventListener('click', loadFilesView);
+  toolbar.append(up, fileInput, mk, rf);
+  content.appendChild(toolbar);
+
+  const list = document.createElement('div');
+  list.className = 'file-list';
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'file-empty';
+    empty.textContent = '此文件夹为空';
+    list.appendChild(empty);
+  }
+  for (const e of entries) {
+    const row = document.createElement('div');
+    row.className = 'file-row' + (e.dir ? ' is-dir' : '');
+    const icon = document.createElement('span');
+    icon.className = 'file-icon';
+    icon.innerHTML = e.dir ? DIR_ICON : FILE_ICON;
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = e.name;
+    const meta = document.createElement('span');
+    meta.className = 'file-meta';
+    meta.textContent = e.dir ? '目录' : `${formatBytes(e.size)} · ${new Date(e.mtime).toLocaleString()}`;
+    const actions = document.createElement('span');
+    actions.className = 'file-actions';
+    if (!e.dir) {
+      const dl = document.createElement('a');
+      dl.className = 'btn small';
+      dl.textContent = '下载';
+      dl.target = '_blank';
+      dl.rel = 'noopener';
+      dl.href = '/api/files/download?path=' + encodeURIComponent(filesRel(e.name));
+      actions.appendChild(dl);
+    }
+    const del = document.createElement('button');
+    del.className = 'btn small danger-text';
+    del.textContent = '删除';
+    del.addEventListener('click', async () => {
+      if (!confirm(`确定删除「${e.name}」？${e.dir ? '目录内容将一并删除。' : ''}`)) return;
+      try {
+        await call('files.delete', { path: filesRel(e.name) });
+        loadFilesView();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    actions.appendChild(del);
+    row.append(icon, name, meta, actions);
+    if (e.dir) {
+      row.addEventListener('click', () => {
+        filesPath = filesRel(e.name);
+        loadFilesView();
+      });
+    }
+    list.appendChild(row);
+  }
+  content.appendChild(list);
 }
 
 // ---------- 访问码 ----------
@@ -523,6 +765,16 @@ document.getElementById('confirmOkBtn').addEventListener('click', async () => {
   }
 });
 document.getElementById('confirmCancelBtn').addEventListener('click', closeModal);
+
+// ---- 存储位置表单 ----
+document.getElementById('storageForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitStoragePath('storagePathInput', 'storageError');
+});
+document.getElementById('storagePageForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitStoragePath('storagePageInput', 'storagePageError');
+});
 
 // 手机端抽屉菜单：三条杠开合，遮罩点击收起，回到桌面尺寸时清理状态
 document.getElementById('menuBtn').addEventListener('click', () => {

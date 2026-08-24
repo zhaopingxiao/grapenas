@@ -17,6 +17,7 @@ import { log } from './logger.js';
 import { parseCookies, readBody, readRawBody, sendJson, redirect, getBearerToken } from './util.js';
 import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule } from './proxy.js';
 import { ensureAppsRunning, stageTar, installStagedTar } from './apps.js';
+import { resolveStoragePath } from './storage.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WEB_DIR = path.join(ROOT, 'web');
@@ -230,6 +231,31 @@ async function handleRequest(req, res) {
   }
   if (pathname === '/api/apps/icon' && req.method === 'GET') {
     return serveAppIcon(res, url.searchParams.get('id'));
+  }
+
+  // ---- 文件管理 ----
+  if (pathname === '/api/files/download' && req.method === 'GET') {
+    try {
+      const fp = resolveStoragePath(url.searchParams.get('path'));
+      if (!fs.statSync(fp).isFile()) throw new Error('不是文件');
+      return serveFile(res, fp);
+    } catch {
+      return sendJson(res, 404, { ok: false, error: '文件不存在' });
+    }
+  }
+  if (pathname === '/api/files/upload' && req.method === 'POST') {
+    try {
+      const dir = resolveStoragePath(url.searchParams.get('path'));
+      const name = String(url.searchParams.get('name') || '');
+      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) {
+        throw new Error('文件名非法');
+      }
+      const body = await readRawBody(req, 200 * 1024 * 1024);
+      fs.writeFileSync(path.join(dir, name), body);
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
   }
 
   // 所有内置页面共用同一个壳页面 "/"

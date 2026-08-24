@@ -12,6 +12,7 @@ export const PORT = 9643;
 const config = {
   accessCodeHash: null,
   accessCodeSalt: null,
+  storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
 };
@@ -89,4 +90,13 @@ export function removeApp(id) {
   config.apps.splice(idx, 1);
   persist();
   return true;
+}
+
+export function getStoragePath() {
+  return config.storagePath;
+}
+
+export function setStoragePath(p) {
+  config.storagePath = p;
+  persist();
 }

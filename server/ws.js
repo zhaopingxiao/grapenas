@@ -1,4 +1,5 @@
 // WebSocket 服务：所有数据通讯的唯一通道，握手时校验 cookie 中的临时令牌
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -10,6 +11,7 @@ import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
 import { checkApp, startApp, stopApp, markAppStopping, syncAppProxyRules, removeAppProxyRules, appHasWebui, uninstallApp } from './apps.js';
+import { isStorageConfigured, getStoragePath, resolveStoragePath, setStoragePath } from './storage.js';
 
 export const COOKIE_NAME = 'grapenas_token';
 
@@ -268,6 +270,63 @@ const handlers = {
     for (const app of getApps()) markAppStopping(app.id);
     restartServer();
     return { restarting: true };
+  },
+
+  // ---- 存储位置 ----
+  'storage.get': () => ({
+    configured: isStorageConfigured(),
+    path: getStoragePath() || null,
+  }),
+
+  'storage.set': (data) => ({
+    path: setStoragePath(data.path),
+  }),
+
+  // ---- 文件管理（存储位置内） ----
+  'files.list': (data) => {
+    const dir = resolveStoragePath(data.path);
+    let st;
+    try {
+      st = fs.statSync(dir);
+    } catch {
+      throw new Error('路径不存在');
+    }
+    if (!st.isDirectory()) throw new Error('不是目录');
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .map((e) => {
+        const full = path.join(dir, e.name);
+        let size = 0;
+        let mtime = 0;
+        try {
+          const s = fs.statSync(full);
+          size = s.size;
+          mtime = s.mtimeMs;
+        } catch {
+          /* 忽略 */
+        }
+        return { name: e.name, dir: e.isDirectory(), size, mtime };
+      })
+      .sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
+    return { path: String(data.path || ''), entries };
+  },
+
+  'files.mkdir': (data) => {
+    const name = String(data.name || '').trim();
+    if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+      throw new Error('文件夹名非法');
+    }
+    const dir = resolveStoragePath(data.path);
+    fs.mkdirSync(path.join(dir, name));
+    return { created: true };
+  },
+
+  'files.delete': (data) => {
+    const target = resolveStoragePath(data.path);
+    if (target === resolveStoragePath('')) throw new Error('不能删除存储根目录');
+    fs.rmSync(target, { recursive: true, force: true });
+    log('info', `文件管理已删除: ${data.path}`);
+    return { deleted: true };
   },
 };
 

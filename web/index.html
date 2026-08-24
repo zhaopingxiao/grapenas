@@ -26,6 +26,7 @@
     </div>
     <nav class="nav">
       <button class="nav-item active" data-view="dashboard">仪表盘</button>
+      <button class="nav-item" data-view="files">文件管理</button>
       <button class="nav-item" data-view="apps">应用</button>
       <button class="nav-item" data-view="features">功能</button>
       <button class="nav-item" data-view="settings">选项</button>
@@ -59,6 +60,52 @@
       <div id="logList" class="log-list"></div>
     </section>
 
+    <!-- 文件管理 -->
+    <section id="view-files" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs" id="filesCrumbs"></div>
+      </div>
+      <div id="filesContent"></div>
+    </section>
+
+    <!-- 存储设置 -->
+    <section id="view-storagesettings" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs">
+          <button class="crumb" data-view="settings">选项</button>
+          <span class="crumb-sep">></span>
+          <span class="crumb-current">存储设置</span>
+        </div>
+      </div>
+      <ul class="menu-list">
+        <li class="menu-item" data-goto="storagelocation"><span>存储位置</span><span class="menu-arrow">›</span></li>
+      </ul>
+    </section>
+
+    <!-- 存储位置 -->
+    <section id="view-storagelocation" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs">
+          <button class="crumb" data-view="settings">选项</button>
+          <span class="crumb-sep">></span>
+          <button class="crumb" data-view="storagesettings">存储设置</button>
+          <span class="crumb-sep">></span>
+          <span class="crumb-current">存储位置</span>
+        </div>
+      </div>
+      <div class="panel-card">
+        <p id="storageStatus" class="muted">读取中…</p>
+        <form id="storagePageForm" class="form">
+          <label>新的存储位置
+            <input id="storagePageInput" type="text" autocomplete="off" required>
+          </label>
+          <p class="muted">重新设置会把当前存储位置的数据迁移到新位置；首次配置会自动迁入历史应用数据。</p>
+          <button class="btn primary" type="submit">保存并迁移</button>
+        </form>
+        <p class="error-mini" id="storagePageError"></p>
+      </div>
+    </section>
+
     <!-- 应用 -->
     <section id="view-apps" class="view hidden">
       <div class="view-header">
@@ -86,6 +133,7 @@
       <ul class="menu-list">
         <li class="menu-item menu-item-danger" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="storagesettings"><span>存储设置</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
@@ -147,6 +195,21 @@
   </main>
 </div>
 <div class="nav-mask" id="navMask"></div>
+
+<!-- 存储位置强制配置遮罩（未配置时进入后必须设置） -->
+<div id="storageOverlay" class="storage-overlay hidden">
+  <div class="modal">
+    <h3>设置存储位置</h3>
+    <p class="confirm-text">首次使用需要配置存储位置：<b>我的文件</b>存放于其中的 <code>user/</code> 目录，<b>应用数据</b>存放于 <code>.package/</code> 目录。</p>
+    <form id="storageForm" class="form">
+      <label>存储位置
+        <input id="storagePathInput" type="text" placeholder="例如 D:\nas-data" autocomplete="off" required>
+      </label>
+      <button class="btn primary" type="submit">保存并进入</button>
+    </form>
+    <p class="error-mini" id="storageError"></p>
+  </div>
+</div>
 
 <!-- 弹窗：添加应用（拖入 tar 应用包） -->
 <div id="modalOverlay" class="modal-overlay hidden">

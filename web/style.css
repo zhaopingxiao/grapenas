@@ -340,6 +340,46 @@ body {
 }
 .modal h3 { font-size: 16px; margin-bottom: 18px; }
 
+/* 文件管理 */
+.file-toolbar { display: flex; gap: 8px; margin-bottom: 14px; }
+.file-list {
+  max-width: 760px;
+  background: #1a1530;
+  border: 1px solid rgba(167, 139, 250, 0.15);
+  border-radius: 12px;
+  padding: 6px;
+}
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.file-row:hover { background: rgba(139, 92, 246, 0.08); }
+.file-row.is-dir { cursor: pointer; }
+.file-icon { display: inline-flex; color: #a78bfa; flex-shrink: 0; }
+.file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-meta { color: #6b6390; font-size: 12px; flex-shrink: 0; }
+.file-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.danger-text { color: #f87171; }
+.file-empty { padding: 18px; color: #a89ecf; font-size: 13px; }
+.error-mini { color: #f87171; font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+/* 存储位置强制配置遮罩 */
+.storage-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(10, 6, 20, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.storage-overlay .modal { width: 440px; max-width: 92vw; }
+.storage-overlay code { background: rgba(0, 0, 0, 0.35); padding: 1px 6px; border-radius: 5px; }
+
 /* 列表页菜单（功能/设置/安全设置） */
 .menu-list {
   list-style: none;
