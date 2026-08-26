@@ -186,8 +186,8 @@ async function handleRequest(req, res) {
     if (isAuthed(req)) return redirect(res, '/');
     return serveFile(res, path.join(WEB_DIR, 'auth.html'));
   }
-  if (pathname === '/favicon.svg') {
-    return serveFile(res, path.join(WEB_DIR, 'favicon.svg'));
+  if (pathname === '/grape.svg') {
+    return serveFile(res, path.join(WEB_DIR, 'grape.svg'));
   }
 
   // ---- 其余一律先校验令牌 ----

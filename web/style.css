@@ -499,6 +499,28 @@ body {
   .cards { grid-template-columns: 1fr; }
   .view-header h2 { font-size: 19px; }
   .log-list { height: 300px; }
+
+  /* 文件管理 */
+  .file-toolbar { flex-wrap: wrap; }
+  .file-row { flex-wrap: wrap; row-gap: 6px; padding: 10px; }
+  .file-row .file-meta { flex-basis: 100%; order: 3; margin-left: 26px; }
+  .file-actions { margin-left: auto; }
+  .btn.small { padding: 5px 10px; font-size: 12px; }
+
+  /* 应用磁贴 */
+  .app-grid { grid-template-columns: repeat(auto-fill, 88px); gap: 16px 10px; }
+  .tile-icon { width: 60px; height: 60px; }
+  .tile-icon .tile-gear { width: 20px; height: 20px; top: -4px; right: -4px; }
+  .tile-name { max-width: 88px; }
+
+  /* 弹窗与表单 */
+  .modal { padding: 18px; max-height: 82vh; overflow-y: auto; }
+  .panel-card { padding: 16px; }
+  .menu-item { padding: 14px; }
+  .form input { font-size: 16px; } /* 防 iOS 聚焦自动放大 */
+
+  /* 面包屑 */
+  .crumbs { font-size: 17px; gap: 6px; }
 }
 
 /* 日志 */

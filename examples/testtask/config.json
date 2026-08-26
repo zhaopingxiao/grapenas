@@ -1,6 +1,0 @@
-{
-  "id": "testtask",
-  "name": "测试任务",
-  "description": "**无 WebUI 测试应用**\n\n- 每 3 秒向 `heartbeat.log` 写入一行心跳\n- 用于验证：后台任务运行、应用文件目录（存储位置 `.package/`）、存储迁移",
-  "icon": "icon.png"
-}
