@@ -87,9 +87,9 @@ grapenas/
 │   ├── proxy.js           # 反向代理：HTTP 转发、WS 隧道、HTML 改写、shim 注入
 │   ├── config.js          # 配置持久化
 │   ├── logger.js          # 内存环形日志 + 订阅推送
-│   └── util.js
+│   ├── util.js
+│   └── desktop/           # 内置桌面控制模块（仅 Windows 启用，由 desktop.js 托管）
 ├── web/                   # 前端（单壳页面，无构建）
-├── desktop/               # 内置桌面控制模块（仅 Windows 启用，由 server/desktop.js 托管）
 └── restart_helper.js      # 网页"重启葡萄云"的独立助手
 ```
 

@@ -11,7 +11,7 @@ import { findPidByPort } from './apps.js';
 import { log } from './logger.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const TOOL_PATH = path.join(ROOT, 'desktop');
+const TOOL_PATH = path.join(ROOT, 'server', 'desktop');
 const DESKTOP_PORT = 18000;
 
 let child = null;
