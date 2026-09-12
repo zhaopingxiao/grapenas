@@ -11,7 +11,7 @@ import { findPidByPort } from './apps.js';
 import { log } from './logger.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const TOOL_PATH = path.join(ROOT, 'server', 'desktop');
+const TOOL_PATH = path.join(ROOT, 'server');
 const DESKTOP_PORT = 18000;
 
 let child = null;
@@ -29,7 +29,7 @@ export function desktopToolPath() {
 
 function toolOk() {
   try {
-    return fs.existsSync(path.join(desktopToolPath(), 'server.js'));
+    return fs.existsSync(path.join(desktopToolPath(), 'desktop-server.cjs'));
   } catch {
     return false;
   }
@@ -85,7 +85,7 @@ export async function startDesktop() {
   const fd = fs.openSync(path.join(ROOT, 'data', 'logs', 'desktop.log'), 'a');
   child = spawn(
     process.execPath,
-    ['server.js', '--host', '127.0.0.1', '--port', String(DESKTOP_PORT), '--token', token],
+    ['desktop-server.cjs', '--host', '127.0.0.1', '--port', String(DESKTOP_PORT), '--token', token],
     {
       cwd: desktopToolPath(),
       detached: false,

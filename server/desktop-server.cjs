@@ -18,9 +18,9 @@ const path = require("path");
 const express = require("express");
 const { WebSocketServer, WebSocket } = require("ws");
 
-const { ScreenGrabber, InputController, VK_MAP, vkFromChar } = require("./desktop");
+const { ScreenGrabber, InputController, VK_MAP, vkFromChar } = require("./desktop-input.cjs");
 
-const STATIC_DIR = path.join(__dirname, "static");
+const STATIC_DIR = path.join(__dirname, "..", "web", "desktop");
 
 const DEFAULTS = {
   monitor: 0,
