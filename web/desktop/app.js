@@ -3,7 +3,6 @@
 
   const $ = (id) => document.getElementById(id);
 
-  const TOKEN_KEY = "webdesktop.token";
   const BUTTONS = { 0: "left", 1: "middle", 2: "right", 3: "x1", 4: "x2" };
 
   const canvas = $("screen");
@@ -12,7 +11,7 @@
   const remoteCursor = $("remoteCursor");
   const overlay = $("overlay");
   const overlayMsg = $("overlayMsg");
-  const tokenInput = $("tokenInput");
+  const refreshBtn = $("refreshBtn");
   const statusDot = $("statusDot");
   const statsEl = $("stats");
   const keyHint = $("keyHint");
@@ -28,6 +27,7 @@
     token: "",
     connected: false,
     manualClose: false,
+    autoRefreshed: false,
     reconnectTimer: 0,
     settingsTimer: 0,
     pingTimer: 0,
@@ -169,17 +169,18 @@
       releaseKeys();
       remoteCursor.style.display = "none";
       if (state.manualClose) {
-        showOverlay("已断开连接");
+        showOverlay("连接已断开");
         return;
       }
+      showOverlay("正在重新连接…");
       if (event.code === 4003) {
-        localStorage.removeItem(TOKEN_KEY);
-        tokenInput.value = "";
-        showOverlay("访问令牌无效，请重新输入");
-        tokenInput.focus();
+        // 令牌已失效（桌面服务重启）：让外层重新获取令牌并重建页面
+        if (!state.autoRefreshed) {
+          state.autoRefreshed = true;
+          setTimeout(requestParentReload, 1500);
+        }
         return;
       }
-      showOverlay("连接已断开，正在重连…");
       state.reconnectTimer = setTimeout(() => connect(state.token), 2000);
     };
     ws.onerror = () => {
@@ -201,8 +202,6 @@
         state.connected = true;
         setStatus("online");
         overlay.classList.add("hidden");
-        localStorage.setItem(TOKEN_KEY, state.token);
-        history.replaceState(null, "", "?token=" + encodeURIComponent(state.token));
         startPing();
         canvas.focus();
         if (document.activeElement !== canvas) keyHint.classList.add("show");
@@ -492,21 +491,27 @@
     state.manualClose = true;
     stopPing();
     if (state.ws) state.ws.close();
-    showOverlay("已断开连接");
+    showOverlay("连接已断开");
   });
 
-  $("connectBtn").addEventListener("click", () => {
-    const token = tokenInput.value.trim();
-    if (!token) {
-      overlayMsg.textContent = "请输入访问令牌";
-      return;
+  // 让外层葡萄云重新获取令牌并重建桌面页面；不可用时退回本页刷新
+  function requestParentReload() {
+    try {
+      if (
+        window.parent &&
+        window.parent !== window &&
+        typeof window.parent.loadDesktopView === "function"
+      ) {
+        window.parent.loadDesktopView();
+        return;
+      }
+    } catch (err) {
+      /* 跨域等情况忽略 */
     }
-    connect(token);
-  });
+    location.reload();
+  }
 
-  tokenInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") $("connectBtn").click();
-  });
+  refreshBtn.addEventListener("click", requestParentReload);
 
   window.addEventListener("resize", layout);
 
@@ -568,12 +573,11 @@
 
   // ---------------------------------------------------------------------- boot
 
-  const urlToken = new URLSearchParams(location.search).get("token");
-  const initialToken = urlToken || localStorage.getItem(TOKEN_KEY);
-  if (initialToken) {
-    tokenInput.value = initialToken;
-    connect(initialToken);
+  const token = new URLSearchParams(location.search).get("token") || "";
+  if (token) {
+    connect(token);
   } else {
-    tokenInput.focus();
+    showOverlay("正在重新连接…");
+    setTimeout(requestParentReload, 1500);
   }
 })();

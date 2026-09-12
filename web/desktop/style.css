@@ -215,29 +215,13 @@ button.primary {
   text-align: center;
 }
 
-.panel h1 {
-  margin: 0 0 6px;
-  font-size: 20px;
-}
-
 .panel p {
   margin: 8px 0;
   color: var(--muted);
 }
 
-.panel input[type="password"] {
-  width: 100%;
-  margin: 10px 0;
-  padding: 9px 10px;
-  font-size: 14px;
-}
-
 .panel button {
   width: 100%;
-}
-
-.panel .hint {
-  font-size: 12px;
 }
 
 @media (max-width: 760px) {
