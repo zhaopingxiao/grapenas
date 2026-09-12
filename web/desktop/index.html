@@ -13,8 +13,6 @@
       <span>Web Desktop</span>
     </div>
     <div class="controls">
-      <button id="modeDesktopBtn">整个桌面</button>
-      <button id="modeWindowBtn" class="active">单独窗口</button>
       <label class="field">屏幕
         <select id="monitorSelect"></select>
       </label>
@@ -38,19 +36,12 @@
       <button id="fullscreenBtn">全屏</button>
       <button id="disconnectBtn">断开</button>
     </div>
-    <div class="window-actions hidden" id="windowActions">
-      <button id="minimizeWinBtn" title="最小化（窗口保持打开）">最小化</button>
-      <button id="closeWinBtn" title="关闭窗口">关闭</button>
-    </div>
     <div id="stats" class="stats">未连接</div>
   </header>
 
   <main id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="remoteCursor" class="remote-cursor"></div>
-    <div id="launcher" class="launcher hidden">
-      <div id="launcherGrid" class="launcher-grid"></div>
-    </div>
     <div id="keyHint" class="key-hint">点击画面后可用键盘控制</div>
   </main>
 

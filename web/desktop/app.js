@@ -22,13 +22,6 @@
   const fpsRange = $("fpsRange");
   const fpsValue = $("fpsValue");
   const scaleSelect = $("scaleSelect");
-  const modeDesktopBtn = $("modeDesktopBtn");
-  const modeWindowBtn = $("modeWindowBtn");
-  const windowActions = $("windowActions");
-  const minimizeWinBtn = $("minimizeWinBtn");
-  const closeWinBtn = $("closeWinBtn");
-  const launcher = $("launcher");
-  const launcherGrid = $("launcherGrid");
 
   const state = {
     ws: null,
@@ -44,8 +37,6 @@
     fps: 0,
     rtt: 0,
     serverStats: null,
-    mode: "window", // desktop=整个桌面 / window=单独窗口
-    activeHwnd: null, // 窗口模式当前查看的窗口
     pressedKeys: new Set(),
     buttonsDown: new Set(),
     lastPos: { x: 0.5, y: 0.5 },
@@ -213,7 +204,6 @@
         localStorage.setItem(TOKEN_KEY, state.token);
         history.replaceState(null, "", "?token=" + encodeURIComponent(state.token));
         startPing();
-        applyMode(message.settings && message.settings.mode, false);
         canvas.focus();
         if (document.activeElement !== canvas) keyHint.classList.add("show");
         break;
@@ -232,31 +222,6 @@
         } else {
           placeCursor(message.nx, message.ny, message.shape);
         }
-        break;
-      case "mode":
-        applyMode(message.mode, false);
-        break;
-      case "windows":
-        renderLauncher(message.apps);
-        break;
-      case "window-shown":
-        state.activeHwnd = message.hwnd;
-        updateWindowView();
-        break;
-      case "window-gone":
-        if (state.activeHwnd === message.hwnd) {
-          state.activeHwnd = null;
-          updateWindowView();
-          refreshLauncher();
-        }
-        break;
-      case "window-closed":
-        state.activeHwnd = null;
-        updateWindowView();
-        setTimeout(refreshLauncher, 2000);
-        break;
-      case "launch-ok":
-        setTimeout(refreshLauncher, 2500);
         break;
       case "error":
         showOverlay(message.message || "服务端错误");
@@ -484,72 +449,6 @@
   function sendSettings(partial) {
     send(Object.assign({ t: "settings" }, partial));
   }
-
-  // ---- 模式切换与启动台（窗口控制） ----
-
-  function applyMode(mode, notify) {
-    const m = mode === "desktop" ? "desktop" : "window";
-    state.mode = m;
-    modeDesktopBtn.classList.toggle("active", m === "desktop");
-    modeWindowBtn.classList.toggle("active", m === "window");
-    if (notify) send({ t: "mode", mode: m });
-    if (m === "desktop") state.activeHwnd = null;
-    updateWindowView();
-    if (m === "window") refreshLauncher();
-  }
-
-  function updateWindowView() {
-    const inWindow = state.mode === "window";
-    const viewing = inWindow && state.activeHwnd != null;
-    launcher.classList.toggle("hidden", !inWindow || viewing);
-    windowActions.classList.toggle("hidden", !viewing);
-    if (!viewing) remoteCursor.style.display = "none";
-  }
-
-  function refreshLauncher() {
-    if (state.mode !== "window") return;
-    send({ t: "windows.list" });
-  }
-
-  function renderLauncher(apps) {
-    if (!Array.isArray(apps)) return;
-    launcherGrid.innerHTML = "";
-    for (const app of apps) {
-      const tile = document.createElement("div");
-      tile.className = "launcher-tile" + (app.hwnd != null ? " open" : "");
-      const icon = document.createElement("div");
-      icon.className = "tile-icon";
-      icon.textContent = (app.name || "?").trim().slice(0, 1).toUpperCase();
-      const label = document.createElement("div");
-      label.className = "tile-label";
-      label.textContent = app.name;
-      tile.append(icon, label);
-      tile.title = app.hwnd != null ? "点击查看窗口" : "点击启动";
-      tile.addEventListener("click", () => {
-        if (app.hwnd != null) {
-          send({ t: "window.show", hwnd: app.hwnd });
-        } else if (app.lnk) {
-          send({ t: "window.launch", lnk: app.lnk });
-          setTimeout(refreshLauncher, 2500);
-        }
-      });
-      launcherGrid.appendChild(tile);
-    }
-  }
-
-  modeDesktopBtn.addEventListener("click", () => applyMode("desktop", true));
-  modeWindowBtn.addEventListener("click", () => applyMode("window", true));
-  minimizeWinBtn.addEventListener("click", () => {
-    if (state.activeHwnd != null) send({ t: "window.minimize", hwnd: state.activeHwnd });
-    state.activeHwnd = null;
-    updateWindowView();
-  });
-  closeWinBtn.addEventListener("click", () => {
-    if (state.activeHwnd != null) send({ t: "window.close", hwnd: state.activeHwnd });
-    state.activeHwnd = null;
-    updateWindowView();
-    setTimeout(refreshLauncher, 2000);
-  });
 
   monitorSelect.addEventListener("change", () =>
     sendSettings({ monitor: Number(monitorSelect.value) })
