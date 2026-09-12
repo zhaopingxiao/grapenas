@@ -57,6 +57,36 @@ const CURSORINFO = koffi.struct("CURSORINFO", {
 const GetCursorInfo = user32.func("bool __stdcall GetCursorInfo(_Inout_ CURSORINFO *pci)");
 const LoadCursorW = user32.func("uintptr_t __stdcall LoadCursorW(void *hInstance, intptr_t lpCursorName)");
 
+// ---- 窗口枚举与控制 ----
+const RECT = koffi.struct("RECT", {
+  left: "int32",
+  top: "int32",
+  right: "int32",
+  bottom: "int32",
+});
+const EnumWindowsProc = koffi.proto("bool __stdcall EnumWindowsProc(uintptr_t hwnd, intptr_t lParam)");
+const EnumWindows = user32.func("bool __stdcall EnumWindows(EnumWindowsProc *cb, intptr_t lParam)");
+const IsWindowVisible = user32.func("bool __stdcall IsWindowVisible(uintptr_t hwnd)");
+const IsWindow = user32.func("bool __stdcall IsWindow(uintptr_t hwnd)");
+const IsIconic = user32.func("bool __stdcall IsIconic(uintptr_t hwnd)");
+const GetWindowTextLengthW = user32.func("int __stdcall GetWindowTextLengthW(uintptr_t hwnd)");
+const GetWindowTextW = user32.func("int __stdcall GetWindowTextW(uintptr_t hwnd, _Out_ uint16 *buf, int maxCount)");
+const GetWindowRect = user32.func("bool __stdcall GetWindowRect(uintptr_t hwnd, _Out_ RECT *rect)");
+const GetWindowLongW = user32.func("int32 __stdcall GetWindowLongW(uintptr_t hwnd, int index)");
+const ShowWindow = user32.func("bool __stdcall ShowWindow(uintptr_t hwnd, int cmd)");
+const SetForegroundWindow = user32.func("bool __stdcall SetForegroundWindow(uintptr_t hwnd)");
+const PostMessageW = user32.func("bool __stdcall PostMessageW(uintptr_t hwnd, uint32 msg, uintptr_t wParam, intptr_t lParam)");
+
+const GWL_STYLE = -16;
+const GWL_EXSTYLE = -20;
+const WS_CHILD = 0x40000000;
+const WS_EX_TOOLWINDOW = 0x00000080;
+const SW_MINIMIZE = 6;
+const SW_RESTORE = 9;
+const SW_SHOW = 5;
+const WM_CLOSE = 0x0010;
+const VK_MENU = 0x12;
+
 // 标准光标句柄 → 形状名（用于网页端渲染相同形状的光标）
 const STANDARD_CURSORS = {
   arrow: 32512,
@@ -234,14 +264,118 @@ class InputController {
     SetCursorPos(x, y);
   }
 
-  // 读取系统光标位置与形状，位置换算为该显示器区域内的归一化坐标（越界裁剪到 0-1）
+  // 读取系统光标位置与形状，位置换算为该区域内的归一化坐标；visible 表示是否在区域内
   cursorInfo(region) {
     const ci = { cbSize: koffi.sizeof(CURSORINFO) };
     if (!GetCursorInfo(ci)) return null;
-    const nx = (ci.ptScreenPos.x - region.left) / Math.max(1, region.width - 1);
-    const ny = (ci.ptScreenPos.y - region.top) / Math.max(1, region.height - 1);
+    const rawNx = (ci.ptScreenPos.x - region.left) / Math.max(1, region.width - 1);
+    const rawNy = (ci.ptScreenPos.y - region.top) / Math.max(1, region.height - 1);
     const shape = cursorShapeMap.get(String(ci.hCursor)) || "arrow";
-    return { nx: Math.min(Math.max(nx, 0), 1), ny: Math.min(Math.max(ny, 0), 1), shape };
+    return {
+      nx: Math.min(Math.max(rawNx, 0), 1),
+      ny: Math.min(Math.max(rawNy, 0), 1),
+      shape,
+      visible: rawNx >= 0 && rawNx <= 1 && rawNy >= 0 && rawNy <= 1,
+    };
+  }
+
+  // ---- 窗口枚举与控制 ----
+
+  // 列出可见的顶层窗口（带标题，过滤工具窗口/子窗口）
+  listWindows() {
+    const list = [];
+    try {
+      EnumWindows((hwnd) => {
+        try {
+          if (!IsWindowVisible(hwnd)) return true;
+          if (GetWindowTextLengthW(hwnd) <= 0) return true;
+          const style = GetWindowLongW(hwnd, GWL_STYLE);
+          if (style & WS_CHILD) return true;
+          const ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+          if (ex & WS_EX_TOOLWINDOW) return true;
+          const buf = new Uint16Array(512);
+          GetWindowTextW(hwnd, buf, 512);
+          const title = Buffer.from(buf.buffer).toString("utf16le").replace(/\0[\s\S]*$/, "").trim();
+          if (!title) return true;
+          const rect = {};
+          GetWindowRect(hwnd, rect);
+          list.push({
+            hwnd: Number(hwnd),
+            title,
+            minimized: !!IsIconic(hwnd),
+            rect: {
+              left: rect.left,
+              top: rect.top,
+              right: rect.right,
+              bottom: rect.bottom,
+            },
+          });
+        } catch {
+          /* 单个窗口失败跳过 */
+        }
+        return true;
+      }, 0);
+    } catch {
+      /* 枚举失败返回空 */
+    }
+    return list;
+  }
+
+  windowExists(hwnd) {
+    try {
+      return !!IsWindow(hwnd);
+    } catch {
+      return false;
+    }
+  }
+
+  windowRect(hwnd) {
+    try {
+      if (!IsWindow(hwnd)) return null;
+      const rect = {};
+      if (!GetWindowRect(hwnd, rect)) return null;
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, minimized: !!IsIconic(hwnd) };
+    } catch {
+      return null;
+    }
+  }
+
+  // 显示窗口：还原（如最小化）并尝试置前
+  showWindow(hwnd) {
+    try {
+      if (!IsWindow(hwnd)) return false;
+      if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+      else ShowWindow(hwnd, SW_SHOW);
+      if (!SetForegroundWindow(hwnd)) {
+        // 前台锁定时用 Alt 键模拟解除（常见做法）
+        this._key(VK_MENU, false);
+        this._key(VK_MENU, true);
+        SetForegroundWindow(hwnd);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  minimizeWindow(hwnd) {
+    try {
+      if (!IsWindow(hwnd)) return false;
+      ShowWindow(hwnd, SW_MINIMIZE);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  closeWindow(hwnd) {
+    try {
+      if (!IsWindow(hwnd)) return false;
+      PostMessageW(hwnd, WM_CLOSE, 0, 0);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   pressButton(name) {
@@ -338,25 +472,35 @@ class ScreenGrabber {
     };
   }
 
-  async grabJpeg(index, quality, scale) {
+  async grabJpeg(index, quality, scale, crop) {
     const monitor = this.monitors[index] || this.monitors[0];
     if (!monitor) throw new Error("no monitor available");
     const image = await monitor.monitor.captureImage();
     const raw = await image.toRaw();
-    let width = image.width;
-    let height = image.height;
+    let outWidth = image.width;
+    let outHeight = image.height;
     let pipeline = sharp(raw, {
-      raw: { width, height, channels: 4 },
+      raw: { width: image.width, height: image.height, channels: 4 },
     });
+    // 裁剪到指定区域（显示器内相对坐标，用于单窗口串流）
+    if (crop && crop.width > 1 && crop.height > 1) {
+      const left = Math.min(Math.max(Math.round(crop.left), 0), image.width - 2);
+      const top = Math.min(Math.max(Math.round(crop.top), 0), image.height - 2);
+      const width = Math.min(Math.max(Math.round(crop.width), 2), image.width - left);
+      const height = Math.min(Math.max(Math.round(crop.height), 2), image.height - top);
+      pipeline = pipeline.extract({ left, top, width, height });
+      outWidth = width;
+      outHeight = height;
+    }
     if (scale && scale < 1) {
-      width = Math.max(1, Math.round(image.width * scale));
-      height = Math.max(1, Math.round(image.height * scale));
-      pipeline = pipeline.resize(width, height, { fit: "fill" });
+      outWidth = Math.max(1, Math.round(outWidth * scale));
+      outHeight = Math.max(1, Math.round(outHeight * scale));
+      pipeline = pipeline.resize(outWidth, outHeight, { fit: "fill" });
     }
     const data = await pipeline
       .jpeg({ quality: Math.round(quality) })
       .toBuffer();
-    return { data, width, height, region: this.region(index) };
+    return { data, width: outWidth, height: outHeight, region: this.region(index) };
   }
 }
 

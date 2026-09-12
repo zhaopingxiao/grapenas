@@ -11,9 +11,11 @@
 "use strict";
 
 const crypto = require("crypto");
+const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const { spawn } = require("child_process");
 
 const express = require("express");
 const { WebSocketServer, WebSocket } = require("ws");
@@ -27,7 +29,53 @@ const DEFAULTS = {
   quality: 70,
   fps: 30,
   scale: 1.0,
+  mode: "window", // desktop=整个桌面 / window=单独窗口（默认）
 };
+
+// 枚举桌面应用（桌面快捷方式 + 开始菜单快捷方式）
+function listApps() {
+  const dirs = [
+    path.join(os.homedir(), "Desktop"),
+    "C:\\Users\\Public\\Desktop",
+    path.join(process.env.APPDATA || "", "Microsoft\\Windows\\Start Menu\\Programs"),
+    "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
+  ];
+  const apps = [];
+  const seen = new Set();
+  const walk = (dir, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < 2) walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.name.toLowerCase().endsWith(".lnk")) continue;
+      const name = entry.name.replace(/\.lnk$/i, "");
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      apps.push({ name, lnk: full });
+    }
+  };
+  for (const dir of dirs) walk(dir, 0);
+  apps.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  return apps;
+}
+
+// 系统窗口标题黑名单（不显示在启动台）
+const SYSTEM_TITLES = [
+  "program manager",
+  "windows input experience",
+  "microsoft text input application",
+  "windows 输入体验",
+  "设置",
+];
 
 const grabber = new ScreenGrabber();
 const input = new InputController();
@@ -139,6 +187,43 @@ class Session {
     this.lastStats = performance.now();
     this.closed = false;
     this.cursorTimer = 0;
+    this.activeHwnd = null;
+  }
+
+  // 启动台列表：桌面应用 + 已打开窗口（按名称匹配），已打开的带 hwnd
+  listLauncher() {
+    const windows = input
+      .listWindows()
+      .filter((w) => !SYSTEM_TITLES.includes(w.title.toLowerCase()));
+    const apps = listApps();
+    const used = new Set();
+    const entries = [];
+    for (const app of apps) {
+      const lower = app.name.toLowerCase();
+      const match = windows.find((w) => !used.has(w.hwnd) && w.title.toLowerCase().includes(lower));
+      if (match) used.add(match.hwnd);
+      entries.push({
+        name: app.name,
+        lnk: app.lnk,
+        hwnd: match ? match.hwnd : null,
+        minimized: match ? match.minimized : false,
+      });
+    }
+    for (const w of windows) {
+      if (!used.has(w.hwnd)) {
+        entries.push({ name: w.title, lnk: null, hwnd: w.hwnd, minimized: w.minimized });
+      }
+    }
+    return entries;
+  }
+
+  // 当前光标推送区域：桌面模式=显示器，窗口模式=活动窗口（无窗口返回 null）
+  cursorRegion() {
+    if (this.settings.mode !== "window") return this.region;
+    if (!this.activeHwnd) return null;
+    const rect = input.windowRect(this.activeHwnd);
+    if (!rect) return null;
+    return { left: rect.left, top: rect.top, width: rect.right - rect.left, height: rect.bottom - rect.top };
   }
 
   // 光标位置/形状主动推送（比客户端轮询少一个请求往返，延迟更低）
@@ -146,8 +231,12 @@ class Session {
     this.stopCursorPush();
     this.cursorTimer = setInterval(() => {
       if (this.closed) return;
-      const info = input.cursorInfo(this.region);
-      if (info) this.sendJson({ t: "cursor", nx: info.nx, ny: info.ny, shape: info.shape });
+      const region = this.cursorRegion();
+      if (!region) return;
+      const info = input.cursorInfo(region);
+      if (info) {
+        this.sendJson({ t: "cursor", nx: info.nx, ny: info.ny, shape: info.shape, visible: info.visible });
+      }
     }, 50);
   }
 
@@ -202,9 +291,60 @@ class Session {
       case "settings":
         this.handleSettings(message);
         break;
+      case "mode": {
+        const mode = message.mode === "desktop" ? "desktop" : "window";
+        this.settings.mode = mode;
+        this.activeHwnd = null;
+        this.sendJson({ t: "mode", mode });
+        break;
+      }
+      case "windows.list":
+        this.sendJson({ t: "windows", apps: this.listLauncher() });
+        break;
+      case "window.show": {
+        const hwnd = Number(message.hwnd);
+        if (input.windowExists(hwnd) && input.showWindow(hwnd)) {
+          this.activeHwnd = hwnd;
+          this.sendJson({ t: "window-shown", hwnd });
+        } else {
+          this.sendJson({ t: "window-gone", hwnd });
+        }
+        break;
+      }
+      case "window.minimize": {
+        const hwnd = Number(message.hwnd != null ? message.hwnd : this.activeHwnd);
+        input.minimizeWindow(hwnd);
+        if (this.activeHwnd === hwnd) this.activeHwnd = null;
+        this.sendJson({ t: "windows", apps: this.listLauncher() });
+        break;
+      }
+      case "window.close": {
+        const hwnd = Number(message.hwnd != null ? message.hwnd : this.activeHwnd);
+        input.closeWindow(hwnd);
+        if (this.activeHwnd === hwnd) this.activeHwnd = null;
+        this.sendJson({ t: "window-closed", hwnd });
+        break;
+      }
+      case "window.launch": {
+        const lnk = String(message.lnk || "");
+        if (!lnk.toLowerCase().endsWith(".lnk") || !fs.existsSync(lnk)) {
+          this.sendJson({ t: "error", message: "应用快捷方式不存在" });
+          break;
+        }
+        try {
+          spawn("cmd", ["/c", "start", "", lnk], { windowsHide: true, detached: true }).unref();
+          this.sendJson({ t: "launch-ok" });
+        } catch (err) {
+          this.sendJson({ t: "error", message: "启动失败: " + err.message });
+        }
+        break;
+      }
       case "cursor": {
-        const pos = input.cursorInfo(this.region);
-        if (pos) this.sendJson({ t: "cursor", nx: pos.nx, ny: pos.ny, shape: pos.shape });
+        const region = this.cursorRegion();
+        const pos = region ? input.cursorInfo(region) : null;
+        if (pos) {
+          this.sendJson({ t: "cursor", nx: pos.nx, ny: pos.ny, shape: pos.shape, visible: pos.visible });
+        }
         break;
       }
       default:
@@ -235,12 +375,34 @@ class Session {
     });
     while (!this.closed && this.ws.readyState === WebSocket.OPEN) {
       const started = performance.now();
+      // 单独窗口模式：没有活动窗口时不发送画面（启动台由前端渲染）
+      if (this.settings.mode === "window" && !this.activeHwnd) {
+        await sleep(120);
+        continue;
+      }
+      let crop = null;
+      if (this.settings.mode === "window" && this.activeHwnd) {
+        const rect = input.windowRect(this.activeHwnd);
+        if (!rect || rect.minimized) {
+          this.sendJson({ t: "window-gone", hwnd: this.activeHwnd });
+          this.activeHwnd = null;
+          await sleep(120);
+          continue;
+        }
+        crop = {
+          left: rect.left - this.region.left,
+          top: rect.top - this.region.top,
+          width: rect.right - rect.left,
+          height: rect.bottom - rect.top,
+        };
+      }
       let frame;
       try {
         frame = await grabber.grabJpeg(
           this.settings.monitor,
           this.settings.quality,
-          this.settings.scale
+          this.settings.scale,
+          crop
         );
       } catch (err) {
         try {
@@ -283,16 +445,17 @@ class Session {
 
   handleMouse(message) {
     const action = message.a;
+    const region = this.cursorRegion() || this.region;
     if (action === "move") {
-      input.move(message.x, message.y, this.region);
+      input.move(message.x, message.y, region);
     } else if (action === "down") {
       const button = message.b || "left";
-      input.move(message.x, message.y, this.region);
+      input.move(message.x, message.y, region);
       input.pressButton(button);
       this.pressedButtons.add(button);
     } else if (action === "up") {
       const button = message.b || "left";
-      input.move(message.x, message.y, this.region);
+      input.move(message.x, message.y, region);
       input.releaseButton(button);
       this.pressedButtons.delete(button);
     } else if (action === "scroll") {

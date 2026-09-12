@@ -282,7 +282,9 @@ async function handleRequest(req, res) {
     const desktopExtra =
       '<style>#toolbar .brand,#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
       '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}' +
-      'select,input[type="password"]{background:var(--panel) !important;}button{background:var(--panel) !important;}' +
+      'select,input[type="password"]{background:var(--panel) !important;}' +
+      'button{background:var(--panel) !important;}' +
+      'button.active,button.primary{background:var(--accent) !important;color:#fff !important;}' +
       '</style>' +
       '<script>(function(){' +
       'function sync(){try{' +
