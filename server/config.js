@@ -13,6 +13,8 @@ const config = {
   accessCodeHash: null,
   accessCodeSalt: null,
   storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
+  themeColor: '#8b5cf6', // 主题色
+  desktopPath: null, // 桌面控制工具路径（默认 D:\code\webpg）
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
 };
@@ -98,5 +100,23 @@ export function getStoragePath() {
 
 export function setStoragePath(p) {
   config.storagePath = p;
+  persist();
+}
+
+export function getThemeColor() {
+  return config.themeColor || '#8b5cf6';
+}
+
+export function setThemeColor(color) {
+  config.themeColor = color;
+  persist();
+}
+
+export function getDesktopPath() {
+  return config.desktopPath;
+}
+
+export function setDesktopPath(p) {
+  config.desktopPath = p;
   persist();
 }

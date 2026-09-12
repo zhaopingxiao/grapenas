@@ -18,6 +18,7 @@ import { parseCookies, readBody, readRawBody, sendJson, redirect, getBearerToken
 import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule } from './proxy.js';
 import { ensureAppsRunning, stageTar, installStagedTar } from './apps.js';
 import { resolveStoragePath } from './storage.js';
+import { desktopSupported, desktopStatus, desktopRule } from './desktop.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WEB_DIR = path.join(ROOT, 'web');
@@ -268,6 +269,15 @@ async function handleRequest(req, res) {
   // 所有内置页面共用同一个壳页面 "/"
   if (pathname === '/' || pathname === '/index.html') {
     return serveFile(res, path.join(WEB_DIR, 'index.html'));
+  }
+
+  // ---- 控制桌面（内部代理到 webpg 子服务） ----
+  if (pathname === '/desktop' || pathname.startsWith('/desktop/')) {
+    if (!desktopSupported()) return sendJson(res, 404, { ok: false, error: '仅 Windows 系统支持控制桌面' });
+    if (!desktopStatus().running) return sendJson(res, 503, { ok: false, error: '桌面控制服务未启动' });
+    const dRule = desktopRule();
+    if (pathname === dRule.path) return redirect(res, '/desktop/');
+    return proxyHttpRequest(req, res, dRule, toTargetPath(dRule, pathname, url.search));
   }
 
   // 反向代理（HTTP 部分；WebSocket 部分在 upgrade 处理中）

@@ -6,14 +6,26 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, PORT } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeColor, setThemeColor, PORT } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
 import { checkApp, startApp, stopApp, markAppStopping, syncAppProxyRules, removeAppProxyRules, appHasWebui, uninstallApp } from './apps.js';
 import { isStorageConfigured, getStoragePath, resolveStoragePath, setStoragePath, moveEntry, copyEntry } from './storage.js';
+import { desktopStatus, startDesktop, stopDesktop, desktopRule } from './desktop.js';
 
 export const COOKIE_NAME = 'grapenas_token';
+
+// 已认证客户端广播（主题色等全局事件）
+let wssRef = null;
+
+function broadcastEvent(event, data) {
+  if (!wssRef) return;
+  const payload = JSON.stringify({ type: 'event', event, data });
+  for (const client of wssRef.clients) {
+    if (client.readyState === 1 && client.authed) client.send(payload);
+  }
+}
 
 // WebSocket 认证：cookie 令牌 > Authorization: Bearer 头 > ?token= 查询参数
 // 葡萄云不设独立 WS 密钥，复用访问码签发的临时令牌
@@ -34,6 +46,7 @@ function wsAuthed(req) {
 export function setupWebSocket(server) {
   // noServer 模式：自行接管 upgrade，以便同时处理反向代理路径上的 WebSocket
   const wss = new WebSocketServer({ noServer: true });
+  wssRef = wss;
 
   server.on('upgrade', (req, socket, head) => {
     let url;
@@ -48,6 +61,22 @@ export function setupWebSocket(server) {
     // NAS 自身通讯通道（令牌校验在 connection 中处理，保持 4401 语义）
     if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      return;
+    }
+
+    // 控制桌面内部代理（如 /desktop/ws?token=...）
+    if (pathname === '/desktop' || pathname.startsWith('/desktop/')) {
+      const cookies = parseCookies(req.headers.cookie);
+      if (!validateToken(cookies[COOKIE_NAME])) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      if (desktopStatus().running) {
+        proxyWsUpgrade(req, socket, head, desktopRule(), pathname, url.search);
+      } else {
+        socket.destroy();
+      }
       return;
     }
 
@@ -270,6 +299,28 @@ const handlers = {
     for (const app of getApps()) markAppStopping(app.id);
     restartServer();
     return { restarting: true };
+  },
+
+  // ---- 控制桌面 ----
+  'desktop.status': () => desktopStatus(),
+
+  'desktop.start': () => startDesktop(),
+
+  'desktop.stop': () => {
+    stopDesktop();
+    return { running: false };
+  },
+
+  // ---- 主题色 ----
+  'theme.get': () => ({ color: getThemeColor() }),
+
+  'theme.set': (data) => {
+    const color = String(data.color || '');
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error('颜色格式不正确（应为 #RRGGBB）');
+    setThemeColor(color);
+    broadcastEvent('theme', { color });
+    log('info', `主题色已修改: ${color}`);
+    return { color };
   },
 
   // ---- 存储位置 ----

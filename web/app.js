@@ -41,6 +41,8 @@ function connect() {
     updateConnStatus();
     refreshCurrentView();
     checkStorageConfig();
+    syncTheme();
+    checkDesktopSupport();
   };
 
   ws.onmessage = (e) => {
@@ -87,6 +89,17 @@ function call(type, data) {
 
 function handleEvent(msg) {
   if (msg.event === 'log' && state.view === 'dashboard') appendLog(msg.data);
+  if (msg.event === 'theme' && msg.data) applyTheme(msg.data.color);
+}
+
+// 控制桌面入口仅 Windows 显示
+async function checkDesktopSupport() {
+  try {
+    const st = await call('desktop.status');
+    document.getElementById('navDesktop').classList.toggle('hidden', !st.supported);
+  } catch {
+    /* 忽略 */
+  }
 }
 
 function updateConnStatus() {
@@ -101,9 +114,12 @@ const VIEW_LOADERS = {
   dashboard: loadDashboard,
   files: loadFilesView,
   apps: loadApps,
+  desktop: loadDesktopView,
   accesscode: loadAccessCode,
   proxy: loadProxyView,
   security: loadSecurityView,
+  personalization: loadPersonalizationView,
+  themecolor: loadThemeColorView,
   storagesettings: loadStorageSettingsView,
   storagelocation: loadStorageLocation,
 };
@@ -113,11 +129,13 @@ const NAV_OF = {
   dashboard: 'dashboard',
   files: 'files',
   apps: 'apps',
-  features: 'features',
-  proxy: 'features', // 反向代理属于"功能"
+  desktop: 'desktop',
   settings: 'settings',
-  security: 'settings', // 安全设置属于"设置"
-  accesscode: 'settings', // 访问码属于"设置 > 安全设置"
+  personalization: 'settings',
+  themecolor: 'settings',
+  proxy: 'settings', // 反向代理属于"选项"
+  security: 'settings',
+  accesscode: 'settings',
   storagesettings: 'settings',
   storagelocation: 'settings',
 };
@@ -288,6 +306,139 @@ function loadStorageSettingsView() {
   ]);
 }
 
+// ---------- 个性化设置 / 主题色 ----------
+
+const THEME_PRESETS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'];
+
+function loadPersonalizationView() {
+  renderCrumbs(document.getElementById('crumbsPersonalization'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '个性化设置', current: true },
+  ]);
+}
+
+async function loadThemeColorView() {
+  renderCrumbs(document.getElementById('crumbsThemecolor'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '个性化设置', click: () => switchView('personalization') },
+    { label: '主题色', current: true },
+  ]);
+  try {
+    const t = await call('theme.get');
+    document.getElementById('themeColorInput').value = t.color;
+    renderThemeSwatches(t.color);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function renderThemeSwatches(current) {
+  const wrap = document.getElementById('themeSwatches');
+  wrap.innerHTML = '';
+  for (const color of THEME_PRESETS) {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = 'theme-swatch' + (color.toLowerCase() === String(current).toLowerCase() ? ' active' : '');
+    sw.style.background = color;
+    sw.title = color;
+    sw.addEventListener('click', () => saveTheme(color));
+    wrap.appendChild(sw);
+  }
+}
+
+async function saveTheme(color) {
+  try {
+    await call('theme.set', { color });
+    applyTheme(color);
+    renderThemeSwatches(color);
+    document.getElementById('themeColorInput').value = color;
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// 主题色应用：派生深浅色阶写入 CSS 变量
+function shadeHex(color, factor) {
+  const n = parseInt(color.slice(1), 16);
+  let r = (n >> 16) & 255;
+  let g = (n >> 8) & 255;
+  let b = n & 255;
+  if (factor <= 1) {
+    r = Math.round(r * factor);
+    g = Math.round(g * factor);
+    b = Math.round(b * factor);
+  } else {
+    const f = factor - 1;
+    r = Math.round(r + (255 - r) * f);
+    g = Math.round(g + (255 - g) * f);
+    b = Math.round(b + (255 - b) * f);
+  }
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function applyTheme(color) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(color))) return;
+  const n = parseInt(color.slice(1), 16);
+  const root = document.documentElement.style;
+  root.setProperty('--accent', color);
+  root.setProperty('--accent-dark', shadeHex(color, 0.72));
+  root.setProperty('--accent-mid', shadeHex(color, 0.85));
+  root.setProperty('--accent-light', shadeHex(color, 1.45));
+  root.setProperty('--accent-rgb', `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
+  try {
+    localStorage.setItem('grapenas_theme', color);
+  } catch {
+    /* 忽略 */
+  }
+}
+
+// 启动时先用本地缓存立即上色，随后与服务端同步
+(function initTheme() {
+  try {
+    const cached = localStorage.getItem('grapenas_theme');
+    if (cached) applyTheme(cached);
+  } catch {
+    /* 忽略 */
+  }
+})();
+
+async function syncTheme() {
+  try {
+    const t = await call('theme.get');
+    applyTheme(t.color);
+  } catch {
+    /* 忽略 */
+  }
+}
+
+// ---------- 控制桌面 ----------
+
+async function loadDesktopView() {
+  const body = document.getElementById('desktopBody');
+  body.innerHTML = '<p class="muted">正在启动桌面控制服务…</p>';
+  try {
+    let st = await call('desktop.status');
+    if (!st.supported) {
+      body.innerHTML = '<p class="muted">仅 Windows 系统支持控制桌面。</p>';
+      return;
+    }
+    if (!st.toolOk) {
+      body.innerHTML = `<p class="muted">未找到桌面控制工具（${escapeHtml(st.toolPath)}）</p>`;
+      return;
+    }
+    if (!st.running) {
+      st = await call('desktop.start');
+    }
+    body.innerHTML = '';
+    const frame = document.createElement('iframe');
+    frame.className = 'desktop-frame';
+    frame.src = '/desktop/?token=' + encodeURIComponent(st.token || '');
+    body.appendChild(frame);
+  } catch (err) {
+    body.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
 async function submitStoragePath(inputId, errorId) {
   const p = document.getElementById(inputId).value.trim();
   const errEl = document.getElementById(errorId);
@@ -344,8 +495,12 @@ function makeFilesEntry(rel, label) {
 }
 
 function renderFilesCrumbs() {
-  const segs = [{ label: '文件管理', click: () => { filesPath = null; loadFilesView(); } }];
-  if (filesPath !== null) {
+  const segs = [];
+  if (filesPath === null) {
+    // 文件管理根：当前页，不可点
+    segs.push({ label: '文件管理', current: true });
+  } else {
+    segs.push({ label: '文件管理', click: () => { filesPath = null; loadFilesView(); } });
     const parts = filesPath.split('/');
     let cur = '';
     parts.forEach((part, i) => {
@@ -794,6 +949,10 @@ function renderMarkdown(md) {
 // ---------- 反向代理 ----------
 
 async function loadProxyView() {
+  renderCrumbs(document.getElementById('crumbsProxy'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '反向代理', current: true },
+  ]);
   try {
     renderProxies(await call('proxy.list'));
   } catch (err) {
@@ -947,6 +1106,11 @@ document.getElementById('storagePageForm').addEventListener('submit', (e) => {
 
 // ---- 面包屑折叠弹窗 ----
 document.getElementById('breadcrumbCloseBtn').addEventListener('click', closeModal);
+
+// ---- 主题色 ----
+document.getElementById('themeColorInput').addEventListener('change', (e) => {
+  saveTheme(e.target.value);
+});
 
 // ---- 移动 / 复制 ----
 document.getElementById('moveCopyConfirmBtn').addEventListener('click', async () => {

@@ -16,7 +16,7 @@ export function normalizeProxyPath(p) {
 }
 
 // 系统保留路径，不可被代理占用
-const RESERVED = ['/api', '/auth', '/ws', '/grape.svg'];
+const RESERVED = ['/api', '/auth', '/ws', '/grape.svg', '/desktop'];
 
 export function isReservedPath(p) {
   if (p === '/') return true;

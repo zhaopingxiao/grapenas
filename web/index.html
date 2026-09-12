@@ -28,7 +28,7 @@
       <button class="nav-item active" data-view="dashboard">仪表盘</button>
       <button class="nav-item" data-view="files">文件管理</button>
       <button class="nav-item" data-view="apps">应用</button>
-      <button class="nav-item" data-view="features">功能</button>
+      <button class="nav-item hidden" id="navDesktop" data-view="desktop">控制桌面</button>
       <button class="nav-item" data-view="settings">选项</button>
     </nav>
     <div class="sidebar-footer">
@@ -104,14 +104,12 @@
       <div id="appGrid" class="app-grid"></div>
     </section>
 
-    <!-- 功能：子功能入口列表 -->
-    <section id="view-features" class="view hidden">
+    <!-- 控制桌面（仅 Windows 显示入口） -->
+    <section id="view-desktop" class="view hidden">
       <div class="view-header">
-        <h2>功能</h2>
+        <h2>控制桌面</h2>
       </div>
-      <ul class="menu-list">
-        <li class="menu-item" data-goto="proxy"><span>反向代理</span><span class="menu-arrow">›</span></li>
-      </ul>
+      <div id="desktopBody"></div>
     </section>
 
     <!-- 选项：设置分组入口列表 -->
@@ -121,9 +119,35 @@
       </div>
       <ul class="menu-list">
         <li class="menu-item menu-item-danger" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="personalization"><span>个性化设置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="proxy"><span>反向代理</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="storagesettings"><span>存储设置</span><span class="menu-arrow">›</span></li>
       </ul>
+    </section>
+
+    <!-- 个性化设置：设置分组列表 -->
+    <section id="view-personalization" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs" id="crumbsPersonalization"></div>
+      </div>
+      <ul class="menu-list">
+        <li class="menu-item" data-goto="themecolor"><span>主题色</span><span class="menu-arrow">›</span></li>
+      </ul>
+    </section>
+
+    <!-- 主题色 -->
+    <section id="view-themecolor" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs" id="crumbsThemecolor"></div>
+      </div>
+      <div class="panel-card">
+        <p class="muted">选择葡萄云的主题色</p>
+        <div id="themeSwatches" class="theme-swatches"></div>
+        <label class="theme-custom">自定义颜色
+          <input type="color" id="themeColorInput" value="#8b5cf6">
+        </label>
+      </div>
     </section>
 
     <!-- 安全设置：设置分组列表 -->
@@ -161,11 +185,7 @@
     <!-- 反向代理 -->
     <section id="view-proxy" class="view hidden">
       <div class="view-header">
-        <div class="crumbs">
-          <button class="crumb" data-view="features">功能</button>
-          <span class="crumb-sep">></span>
-          <span class="crumb-current">反向代理</span>
-        </div>
+        <div class="crumbs" id="crumbsProxy"></div>
         <button id="openProxyModal" class="btn primary small">+ 添加规则</button>
       </div>
       <p class="muted page-desc">将本机（localhost）指定端口的 Web 服务代理到子路径，WebSocket 同步映射，页面内的绝对路径资源与前端路由会自动适配。</p>
