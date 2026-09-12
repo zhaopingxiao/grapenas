@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeColor, setThemeColor, PORT } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeColor, setThemeColor, getBgColor, setBgColor, PORT } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -311,16 +311,23 @@ const handlers = {
     return { running: false };
   },
 
-  // ---- 主题色 ----
-  'theme.get': () => ({ color: getThemeColor() }),
+  // ---- 页面颜色（主题色 + 背景色） ----
+  'theme.get': () => ({ color: getThemeColor(), bg: getBgColor() }),
 
   'theme.set': (data) => {
-    const color = String(data.color || '');
-    if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error('颜色格式不正确（应为 #RRGGBB）');
-    setThemeColor(color);
-    broadcastEvent('theme', { color });
-    log('info', `主题色已修改: ${color}`);
-    return { color };
+    const HEX = /^#[0-9a-fA-F]{6}$/;
+    if (data.color != null) {
+      if (!HEX.test(String(data.color))) throw new Error('主题色格式不正确（应为 #RRGGBB）');
+      setThemeColor(String(data.color));
+    }
+    if (data.bg != null) {
+      if (!HEX.test(String(data.bg))) throw new Error('背景色格式不正确（应为 #RRGGBB）');
+      setBgColor(String(data.bg));
+    }
+    const result = { color: getThemeColor(), bg: getBgColor() };
+    broadcastEvent('theme', result);
+    log('info', `页面颜色已修改: 主题 ${result.color} / 背景 ${result.bg}`);
+    return result;
   },
 
   // ---- 存储位置 ----

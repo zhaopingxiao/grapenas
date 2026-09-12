@@ -89,7 +89,7 @@ function call(type, data) {
 
 function handleEvent(msg) {
   if (msg.event === 'log' && state.view === 'dashboard') appendLog(msg.data);
-  if (msg.event === 'theme' && msg.data) applyTheme(msg.data.color);
+  if (msg.event === 'theme' && msg.data) applyTheme(msg.data.color, msg.data.bg);
 }
 
 // 控制桌面入口仅 Windows 显示
@@ -306,9 +306,13 @@ function loadStorageSettingsView() {
   ]);
 }
 
-// ---------- 个性化设置 / 主题色 ----------
+// ---------- 个性化设置 / 页面颜色 ----------
 
 const THEME_PRESETS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'];
+const BG_PRESETS = ['#100c1c', '#000000', '#0f172a', '#1c1c1e', '#f4f4f8', '#f6f2ea', '#eef4fb', '#ffffff'];
+
+let currentBg = '#100c1c';
+let currentAccent = '#8b5cf6';
 
 function loadPersonalizationView() {
   renderCrumbs(document.getElementById('crumbsPersonalization'), [
@@ -321,43 +325,66 @@ async function loadThemeColorView() {
   renderCrumbs(document.getElementById('crumbsThemecolor'), [
     { label: '选项', click: () => switchView('settings') },
     { label: '个性化设置', click: () => switchView('personalization') },
-    { label: '主题色', current: true },
+    { label: '页面颜色', current: true },
   ]);
   try {
     const t = await call('theme.get');
+    currentAccent = t.color;
+    currentBg = t.bg;
     document.getElementById('themeColorInput').value = t.color;
-    renderThemeSwatches(t.color);
+    document.getElementById('bgColorInput').value = t.bg;
+    renderSwatches('bgSwatches', BG_PRESETS, t.bg, saveBg);
+    renderSwatches('themeSwatches', THEME_PRESETS, t.color, saveTheme);
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-function renderThemeSwatches(current) {
-  const wrap = document.getElementById('themeSwatches');
+function renderSwatches(containerId, presets, current, onPick) {
+  const wrap = document.getElementById(containerId);
   wrap.innerHTML = '';
-  for (const color of THEME_PRESETS) {
+  for (const color of presets) {
     const sw = document.createElement('button');
     sw.type = 'button';
     sw.className = 'theme-swatch' + (color.toLowerCase() === String(current).toLowerCase() ? ' active' : '');
     sw.style.background = color;
     sw.title = color;
-    sw.addEventListener('click', () => saveTheme(color));
+    sw.addEventListener('click', () => onPick(color));
     wrap.appendChild(sw);
   }
 }
 
-async function saveTheme(color) {
+// 背景色：应用并让主题色取相对（对比）色
+async function saveBg(bg) {
+  const accent = relativeColor(bg);
   try {
-    await call('theme.set', { color });
-    applyTheme(color);
-    renderThemeSwatches(color);
-    document.getElementById('themeColorInput').value = color;
+    await call('theme.set', { bg, color: accent });
+    currentBg = bg;
+    currentAccent = accent;
+    applyTheme(accent, bg);
+    document.getElementById('bgColorInput').value = bg;
+    document.getElementById('themeColorInput').value = accent;
+    renderSwatches('bgSwatches', BG_PRESETS, bg, saveBg);
+    renderSwatches('themeSwatches', THEME_PRESETS, accent, saveTheme);
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-// 主题色应用：派生深浅色阶写入 CSS 变量
+// 主题色：手动选择
+async function saveTheme(color) {
+  try {
+    await call('theme.set', { color });
+    currentAccent = color;
+    applyTheme(color, currentBg);
+    document.getElementById('themeColorInput').value = color;
+    renderSwatches('themeSwatches', THEME_PRESETS, color, saveTheme);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// 颜色工具
 function shadeHex(color, factor) {
   const n = parseInt(color.slice(1), 16);
   let r = (n >> 16) & 255;
@@ -376,17 +403,108 @@ function shadeHex(color, factor) {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-function applyTheme(color) {
-  if (!/^#[0-9a-fA-F]{6}$/.test(String(color))) return;
-  const n = parseInt(color.slice(1), 16);
+function mixHex(a, b, t) {
+  const na = parseInt(a.slice(1), 16);
+  const nb = parseInt(b.slice(1), 16);
+  const ch = (x, y) => Math.round(x + (y - x) * t);
+  return `rgb(${ch((na >> 16) & 255, (nb >> 16) & 255)}, ${ch((na >> 8) & 255, (nb >> 8) & 255)}, ${ch(na & 255, nb & 255)})`;
+}
+
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+function hexToHsl(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return { h, s, l };
+}
+
+function hslToHex(h, s, l) {
+  const hue = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let r;
+  let g;
+  let b;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue(p, q, h + 1 / 3);
+    g = hue(p, q, h);
+    b = hue(p, q, h - 1 / 3);
+  }
+  const to = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+// 相对色：偏黑→偏白、偏白→偏黑（同色相）
+function relativeColor(hex) {
+  const { h, s, l } = hexToHsl(hex);
+  const newL = l < 0.5 ? 0.78 : 0.22;
+  return hslToHex(h, Math.min(Math.max(s, 0.3), 0.85), newL);
+}
+
+// 应用页面颜色：主题色系 + 背景/文字色系全部写入 CSS 变量
+function applyTheme(accent, bg) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(accent))) return;
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(bg))) bg = '#100c1c';
+  const dark = luminance(bg) < 0.5;
   const root = document.documentElement.style;
-  root.setProperty('--accent', color);
-  root.setProperty('--accent-dark', shadeHex(color, 0.72));
-  root.setProperty('--accent-mid', shadeHex(color, 0.85));
-  root.setProperty('--accent-light', shadeHex(color, 1.45));
+  const n = parseInt(accent.slice(1), 16);
+  root.setProperty('--accent', accent);
+  root.setProperty('--accent-dark', shadeHex(accent, 0.72));
+  root.setProperty('--accent-mid', shadeHex(accent, 0.85));
+  root.setProperty('--accent-light', dark ? shadeHex(accent, 1.45) : shadeHex(accent, 0.68));
   root.setProperty('--accent-rgb', `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
+  root.setProperty('--bg', bg);
+  if (dark) {
+    root.setProperty('--bg-panel', shadeHex(bg, 1.35));
+    root.setProperty('--bg-card', mixHex(bg, '#ffffff', 0.08));
+    root.setProperty('--bg-deep', shadeHex(bg, 0.55));
+    root.setProperty('--bg-elevated', mixHex(bg, '#ffffff', 0.16));
+    root.setProperty('--bg-input', 'rgba(0, 0, 0, 0.3)');
+    root.setProperty('--text', '#e5e0f5');
+    root.setProperty('--text-2', '#cfc7ee');
+    root.setProperty('--text-muted', '#a89ecf');
+    root.setProperty('--text-faint', '#6b6390');
+  } else {
+    root.setProperty('--bg-panel', shadeHex(bg, 0.97));
+    root.setProperty('--bg-card', mixHex(bg, '#ffffff', 0.55));
+    root.setProperty('--bg-deep', shadeHex(bg, 0.93));
+    root.setProperty('--bg-elevated', '#ffffff');
+    root.setProperty('--bg-input', 'rgba(0, 0, 0, 0.05)');
+    root.setProperty('--text', '#1c1730');
+    root.setProperty('--text-2', '#3a3352');
+    root.setProperty('--text-muted', '#6b6390');
+    root.setProperty('--text-faint', '#8a84a3');
+  }
   try {
-    localStorage.setItem('grapenas_theme', color);
+    localStorage.setItem('grapenas_theme', accent);
+    localStorage.setItem('grapenas_bg', bg);
   } catch {
     /* 忽略 */
   }
@@ -395,8 +513,9 @@ function applyTheme(color) {
 // 启动时先用本地缓存立即上色，随后与服务端同步
 (function initTheme() {
   try {
-    const cached = localStorage.getItem('grapenas_theme');
-    if (cached) applyTheme(cached);
+    const cachedAccent = localStorage.getItem('grapenas_theme');
+    const cachedBg = localStorage.getItem('grapenas_bg');
+    if (cachedAccent || cachedBg) applyTheme(cachedAccent || '#8b5cf6', cachedBg || '#100c1c');
   } catch {
     /* 忽略 */
   }
@@ -405,7 +524,9 @@ function applyTheme(color) {
 async function syncTheme() {
   try {
     const t = await call('theme.get');
-    applyTheme(t.color);
+    currentAccent = t.color;
+    currentBg = t.bg;
+    applyTheme(t.color, t.bg);
   } catch {
     /* 忽略 */
   }
@@ -1107,9 +1228,12 @@ document.getElementById('storagePageForm').addEventListener('submit', (e) => {
 // ---- 面包屑折叠弹窗 ----
 document.getElementById('breadcrumbCloseBtn').addEventListener('click', closeModal);
 
-// ---- 主题色 ----
+// ---- 页面颜色 ----
 document.getElementById('themeColorInput').addEventListener('change', (e) => {
   saveTheme(e.target.value);
+});
+document.getElementById('bgColorInput').addEventListener('change', (e) => {
+  saveBg(e.target.value);
 });
 
 // ---- 移动 / 复制 ----

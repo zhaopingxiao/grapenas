@@ -120,7 +120,6 @@
       <ul class="menu-list">
         <li class="menu-item menu-item-danger" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="personalization"><span>个性化设置</span><span class="menu-arrow">›</span></li>
-        <li class="menu-item" data-goto="proxy"><span>反向代理</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
         <li class="menu-item" data-goto="storagesettings"><span>存储设置</span><span class="menu-arrow">›</span></li>
       </ul>
@@ -132,17 +131,25 @@
         <div class="crumbs" id="crumbsPersonalization"></div>
       </div>
       <ul class="menu-list">
-        <li class="menu-item" data-goto="themecolor"><span>主题色</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="themecolor"><span>页面颜色</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
-    <!-- 主题色 -->
+    <!-- 页面颜色 -->
     <section id="view-themecolor" class="view hidden">
       <div class="view-header">
         <div class="crumbs" id="crumbsThemecolor"></div>
       </div>
       <div class="panel-card">
-        <p class="muted">选择葡萄云的主题色</p>
+        <h3>背景色</h3>
+        <div id="bgSwatches" class="theme-swatches"></div>
+        <label class="theme-custom">自定义颜色
+          <input type="color" id="bgColorInput" value="#100c1c">
+        </label>
+      </div>
+      <div class="panel-card">
+        <h3>主题色</h3>
+        <p class="muted">随背景色自动取对比色（偏黑背景配偏白主题、偏白背景配偏黑主题），也可手动选择</p>
         <div id="themeSwatches" class="theme-swatches"></div>
         <label class="theme-custom">自定义颜色
           <input type="color" id="themeColorInput" value="#8b5cf6">

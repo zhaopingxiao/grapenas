@@ -14,6 +14,7 @@ const config = {
   accessCodeSalt: null,
   storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
   themeColor: '#8b5cf6', // 主题色
+  bgColor: '#100c1c', // 背景色
   desktopPath: null, // 桌面控制工具路径（默认 D:\code\webpg）
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
@@ -109,6 +110,15 @@ export function getThemeColor() {
 
 export function setThemeColor(color) {
   config.themeColor = color;
+  persist();
+}
+
+export function getBgColor() {
+  return config.bgColor || '#100c1c';
+}
+
+export function setBgColor(color) {
+  config.bgColor = color;
   persist();
 }
 

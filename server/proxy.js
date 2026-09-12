@@ -103,8 +103,8 @@ function shimScript(prefix) {
   );
 }
 
-function injectShim(body, prefix) {
-  const shim = shimScript(prefix);
+function injectShim(body, prefix, extraHead = '') {
+  const shim = shimScript(prefix) + extraHead;
   const head = /<head(\s[^>]*)?>/i.exec(body);
   if (head) {
     const at = head.index + head[0].length;
@@ -135,7 +135,7 @@ function rewriteHeaders(headers, rule) {
   return out;
 }
 
-export function proxyHttpRequest(req, res, rule, targetPath) {
+export function proxyHttpRequest(req, res, rule, targetPath, extraHead = '') {
   const headers = {};
   for (const [key, value] of Object.entries(req.headers)) {
     if (!HOP_BY_HOP.has(key)) headers[key] = value;
@@ -165,7 +165,7 @@ export function proxyHttpRequest(req, res, rule, targetPath) {
       proxyRes.on('data', (chunk) => chunks.push(chunk));
       proxyRes.on('end', () => {
         let body = Buffer.concat(chunks).toString('utf8');
-        body = injectShim(rewriteHtml(body, rule.path), rule.path);
+        body = injectShim(rewriteHtml(body, rule.path), rule.path, extraHead);
         res.writeHead(proxyRes.statusCode || 200, outHeaders);
         res.end(body);
       });
