@@ -3,6 +3,7 @@
   --accent-dark: #6d28d9;
   --accent-mid: #7c3aed;
   --accent-light: #a78bfa;
+  --accent-contrast: #ffffff;
   --accent-rgb: 139, 92, 246;
   --bg: #100c1c;
   --bg-panel: #171226;
@@ -66,7 +67,7 @@ body {
 .nav-item:hover { background: rgba(var(--accent-rgb), 0.12); color: var(--text); }
 .nav-item.active {
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  color: #fff;
+  color: var(--accent-contrast);
 }
 .sidebar-footer {
   border-top: 1px solid rgba(var(--accent-rgb), 0.15);
@@ -87,7 +88,7 @@ body {
   cursor: pointer;
   transition: background 0.15s;
 }
-.logout:hover { background: rgba(var(--accent-rgb), 0.12); color: #fff; }
+.logout:hover { background: rgba(var(--accent-rgb), 0.12); color: var(--text); }
 
 /* 内容区 */
 .content { flex: 1; padding: 28px 32px; min-width: 0; }
@@ -132,7 +133,7 @@ body {
 .btn.primary {
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   border: none;
-  color: #fff;
+  color: var(--accent-contrast);
 }
 .btn.primary:hover { opacity: 0.9; }
 
@@ -153,7 +154,7 @@ body {
   border-radius: 9px;
   border: 1px solid rgba(var(--accent-rgb), 0.35);
   background: var(--bg-input);
-  color: #fff;
+  color: var(--text);
   font-size: 15px;
   letter-spacing: 4px;
   outline: none;
@@ -232,7 +233,7 @@ body {
   justify-content: center;
   font-size: 30px;
   font-weight: bold;
-  color: #fff;
+  color: var(--accent-contrast);
 }
 .app-tile.has-webui:hover .tile-icon,
 .app-tile.no-webui:hover .tile-icon { filter: brightness(0.65); }
@@ -604,7 +605,7 @@ body {
   border-radius: 10px;
   background: var(--bg-elevated);
   border: 1px solid rgba(var(--accent-rgb), 0.4);
-  color: #fff;
+  color: var(--text);
   font-size: 14px;
   opacity: 0;
   pointer-events: none;

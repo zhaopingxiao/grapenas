@@ -459,11 +459,14 @@ function applyTheme(mode, pair) {
   root.setProperty('--accent-mid', shadeHex(accent, 0.85));
   root.setProperty('--accent-light', dark ? shadeHex(accent, 1.35) : shadeHex(accent, 0.68));
   root.setProperty('--accent-rgb', `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
+  // 主题色作背景时的文字色：偏黑主题配白字，偏白主题配黑字
+  root.setProperty('--accent-contrast', luminance(accent) < 0.5 ? '#ffffff' : '#111111');
   root.setProperty('--bg', bg);
   if (dark) {
-    root.setProperty('--bg-panel', shadeHex(bg, 1.35));
+    // 深色模式：侧边栏比内容区更深
+    root.setProperty('--bg-panel', shadeHex(bg, 0.62));
     root.setProperty('--bg-card', mixHex(bg, '#ffffff', 0.08));
-    root.setProperty('--bg-deep', shadeHex(bg, 0.55));
+    root.setProperty('--bg-deep', shadeHex(bg, 0.45));
     root.setProperty('--bg-elevated', mixHex(bg, '#ffffff', 0.16));
     root.setProperty('--bg-input', 'rgba(0, 0, 0, 0.3)');
     root.setProperty('--text', '#e5e0f5');
@@ -471,7 +474,8 @@ function applyTheme(mode, pair) {
     root.setProperty('--text-muted', '#a89ecf');
     root.setProperty('--text-faint', '#6b6390');
   } else {
-    root.setProperty('--bg-panel', shadeHex(bg, 0.97));
+    // 浅色模式：侧边栏比内容区更浅
+    root.setProperty('--bg-panel', mixHex(bg, '#ffffff', 0.6));
     root.setProperty('--bg-card', mixHex(bg, '#ffffff', 0.55));
     root.setProperty('--bg-deep', shadeHex(bg, 0.93));
     root.setProperty('--bg-elevated', '#ffffff');
