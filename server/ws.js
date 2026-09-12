@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeColor, setThemeColor, getBgColor, setBgColor, PORT } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, PORT } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -311,22 +311,18 @@ const handlers = {
     return { running: false };
   },
 
-  // ---- 页面颜色（主题色 + 背景色） ----
-  'theme.get': () => ({ color: getThemeColor(), bg: getBgColor() }),
+  // ---- 页面颜色（背景模式 + 主题配色对） ----
+  'theme.get': () => ({ mode: getThemeMode(), pair: getThemePair() }),
 
   'theme.set': (data) => {
-    const HEX = /^#[0-9a-fA-F]{6}$/;
-    if (data.color != null) {
-      if (!HEX.test(String(data.color))) throw new Error('主题色格式不正确（应为 #RRGGBB）');
-      setThemeColor(String(data.color));
-    }
-    if (data.bg != null) {
-      if (!HEX.test(String(data.bg))) throw new Error('背景色格式不正确（应为 #RRGGBB）');
-      setBgColor(String(data.bg));
-    }
-    const result = { color: getThemeColor(), bg: getBgColor() };
+    const MODES = ['dark', 'light'];
+    const PAIRS = ['purple', 'blue', 'orange', 'yellow', 'mono'];
+    if (data.mode != null && !MODES.includes(String(data.mode))) throw new Error('背景模式无效');
+    if (data.pair != null && !PAIRS.includes(String(data.pair))) throw new Error('主题配色无效');
+    setTheme(data.mode != null ? String(data.mode) : null, data.pair != null ? String(data.pair) : null);
+    const result = { mode: getThemeMode(), pair: getThemePair() };
     broadcastEvent('theme', result);
-    log('info', `页面颜色已修改: 主题 ${result.color} / 背景 ${result.bg}`);
+    log('info', `页面颜色已修改: ${result.mode} / ${result.pair}`);
     return result;
   },
 

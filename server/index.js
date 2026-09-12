@@ -277,9 +277,9 @@ async function handleRequest(req, res) {
     if (!desktopStatus().running) return sendJson(res, 503, { ok: false, error: '桌面控制服务未启动' });
     const dRule = desktopRule();
     if (pathname === dRule.path) return redirect(res, '/desktop/');
-    // 只保留显示器选择，隐藏画质/帧率/缩放与操作按钮
+    // 只保留显示器选择，隐藏品牌标识/画质/帧率/缩放与操作按钮
     const desktopExtra =
-      '<style>#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
+      '<style>#toolbar .brand,#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
       '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}</style>';
     return proxyHttpRequest(req, res, dRule, toTargetPath(dRule, pathname, url.search), desktopExtra);
   }

@@ -27,8 +27,8 @@
     <nav class="nav">
       <button class="nav-item active" data-view="dashboard">仪表盘</button>
       <button class="nav-item" data-view="files">文件管理</button>
-      <button class="nav-item" data-view="apps">应用</button>
       <button class="nav-item hidden" id="navDesktop" data-view="desktop">控制桌面</button>
+      <button class="nav-item" data-view="apps">应用</button>
       <button class="nav-item" data-view="settings">选项</button>
     </nav>
     <div class="sidebar-footer">
@@ -141,19 +141,13 @@
         <div class="crumbs" id="crumbsThemecolor"></div>
       </div>
       <div class="panel-card">
-        <h3>背景色</h3>
-        <div id="bgSwatches" class="theme-swatches"></div>
-        <label class="theme-custom">自定义颜色
-          <input type="color" id="bgColorInput" value="#100c1c">
-        </label>
+        <h3>背景</h3>
+        <div id="bgModeSwatches" class="theme-swatches"></div>
       </div>
       <div class="panel-card">
         <h3>主题色</h3>
-        <p class="muted">随背景色自动取对比色（偏黑背景配偏白主题、偏白背景配偏黑主题），也可手动选择</p>
+        <p class="muted">深色背景自动配浅色主题、浅色背景配深色主题</p>
         <div id="themeSwatches" class="theme-swatches"></div>
-        <label class="theme-custom">自定义颜色
-          <input type="color" id="themeColorInput" value="#8b5cf6">
-        </label>
       </div>
     </section>
 

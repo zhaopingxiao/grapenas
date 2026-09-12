@@ -89,7 +89,11 @@ function call(type, data) {
 
 function handleEvent(msg) {
   if (msg.event === 'log' && state.view === 'dashboard') appendLog(msg.data);
-  if (msg.event === 'theme' && msg.data) applyTheme(msg.data.color, msg.data.bg);
+  if (msg.event === 'theme' && msg.data) {
+    currentMode = msg.data.mode;
+    currentPair = msg.data.pair;
+    applyTheme(msg.data.mode, msg.data.pair);
+  }
 }
 
 // 控制桌面入口仅 Windows 显示
@@ -308,11 +312,21 @@ function loadStorageSettingsView() {
 
 // ---------- 个性化设置 / 页面颜色 ----------
 
-const THEME_PRESETS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1'];
-const BG_PRESETS = ['#100c1c', '#000000', '#0f172a', '#1c1c1e', '#f4f4f8', '#f6f2ea', '#eef4fb', '#ffffff'];
+const BG_MODES = {
+  dark: { name: '深色', color: '#100c1c' },
+  light: { name: '浅色', color: '#f4f4f8' },
+};
+// 主题配色对：深色背景用浅色变体，浅色背景用深色变体
+const THEME_PAIRS = {
+  purple: { name: '紫', dark: '#7c3aed', light: '#c4b5fd' },
+  blue: { name: '蓝', dark: '#2563eb', light: '#93c5fd' },
+  orange: { name: '橙', dark: '#ea580c', light: '#fdba74' },
+  yellow: { name: '黄', dark: '#ca8a04', light: '#fde047' },
+  mono: { name: '黑白', dark: '#111111', light: '#ffffff' },
+};
 
-let currentBg = '#100c1c';
-let currentAccent = '#8b5cf6';
+let currentMode = 'dark';
+let currentPair = 'purple';
 
 function loadPersonalizationView() {
   renderCrumbs(document.getElementById('crumbsPersonalization'), [
@@ -329,56 +343,69 @@ async function loadThemeColorView() {
   ]);
   try {
     const t = await call('theme.get');
-    currentAccent = t.color;
-    currentBg = t.bg;
-    document.getElementById('themeColorInput').value = t.color;
-    document.getElementById('bgColorInput').value = t.bg;
-    renderSwatches('bgSwatches', BG_PRESETS, t.bg, saveBg);
-    renderSwatches('themeSwatches', THEME_PRESETS, t.color, saveTheme);
+    currentMode = t.mode;
+    currentPair = t.pair;
+    renderModeSwatches();
+    renderPairSwatches();
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-function renderSwatches(containerId, presets, current, onPick) {
-  const wrap = document.getElementById(containerId);
+function accentOf(mode, pair) {
+  const def = THEME_PAIRS[pair] || THEME_PAIRS.purple;
+  return mode === 'dark' ? def.light : def.dark;
+}
+
+function renderModeSwatches() {
+  const wrap = document.getElementById('bgModeSwatches');
   wrap.innerHTML = '';
-  for (const color of presets) {
+  for (const [mode, def] of Object.entries(BG_MODES)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mode-swatch' + (mode === currentMode ? ' active' : '');
+    btn.textContent = def.name;
+    btn.style.background = def.color;
+    btn.style.color = luminance(def.color) > 0.5 ? '#1c1730' : '#e5e0f5';
+    btn.addEventListener('click', () => saveMode(mode));
+    wrap.appendChild(btn);
+  }
+}
+
+function renderPairSwatches() {
+  const wrap = document.getElementById('themeSwatches');
+  wrap.innerHTML = '';
+  for (const [pair, def] of Object.entries(THEME_PAIRS)) {
     const sw = document.createElement('button');
     sw.type = 'button';
-    sw.className = 'theme-swatch' + (color.toLowerCase() === String(current).toLowerCase() ? ' active' : '');
-    sw.style.background = color;
-    sw.title = color;
-    sw.addEventListener('click', () => onPick(color));
+    sw.className = 'theme-swatch' + (pair === currentPair ? ' active' : '');
+    sw.style.background = accentOf(currentMode, pair);
+    sw.title = def.name;
+    sw.addEventListener('click', () => savePair(pair));
     wrap.appendChild(sw);
   }
 }
 
-// 背景色：应用并让主题色取相对（对比）色
-async function saveBg(bg) {
-  const accent = relativeColor(bg);
+async function saveMode(mode) {
   try {
-    await call('theme.set', { bg, color: accent });
-    currentBg = bg;
-    currentAccent = accent;
-    applyTheme(accent, bg);
-    document.getElementById('bgColorInput').value = bg;
-    document.getElementById('themeColorInput').value = accent;
-    renderSwatches('bgSwatches', BG_PRESETS, bg, saveBg);
-    renderSwatches('themeSwatches', THEME_PRESETS, accent, saveTheme);
+    const t = await call('theme.set', { mode });
+    currentMode = t.mode;
+    currentPair = t.pair;
+    applyTheme(currentMode, currentPair);
+    renderModeSwatches();
+    renderPairSwatches();
   } catch (err) {
     toast(err.message, true);
   }
 }
 
-// 主题色：手动选择
-async function saveTheme(color) {
+async function savePair(pair) {
   try {
-    await call('theme.set', { color });
-    currentAccent = color;
-    applyTheme(color, currentBg);
-    document.getElementById('themeColorInput').value = color;
-    renderSwatches('themeSwatches', THEME_PRESETS, color, saveTheme);
+    const t = await call('theme.set', { pair });
+    currentMode = t.mode;
+    currentPair = t.pair;
+    applyTheme(currentMode, currentPair);
+    renderPairSwatches();
   } catch (err) {
     toast(err.message, true);
   }
@@ -418,67 +445,19 @@ function luminance(hex) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-function hexToHsl(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = ((n >> 16) & 255) / 255;
-  const g = ((n >> 8) & 255) / 255;
-  const b = (n & 255) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min) return { h: 0, s: 0, l };
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  let h;
-  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
-  else if (max === g) h = ((b - r) / d + 2) / 6;
-  else h = ((r - g) / d + 4) / 6;
-  return { h, s, l };
-}
-
-function hslToHex(h, s, l) {
-  const hue = (p, q, t) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  let r;
-  let g;
-  let b;
-  if (s === 0) {
-    r = g = b = l;
-  } else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue(p, q, h + 1 / 3);
-    g = hue(p, q, h);
-    b = hue(p, q, h - 1 / 3);
-  }
-  const to = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
-  return `#${to(r)}${to(g)}${to(b)}`;
-}
-
-// 相对色：偏黑→偏白、偏白→偏黑（同色相）
-function relativeColor(hex) {
-  const { h, s, l } = hexToHsl(hex);
-  const newL = l < 0.5 ? 0.78 : 0.22;
-  return hslToHex(h, Math.min(Math.max(s, 0.3), 0.85), newL);
-}
-
-// 应用页面颜色：主题色系 + 背景/文字色系全部写入 CSS 变量
-function applyTheme(accent, bg) {
-  if (!/^#[0-9a-fA-F]{6}$/.test(String(accent))) return;
-  if (!/^#[0-9a-fA-F]{6}$/.test(String(bg))) bg = '#100c1c';
-  const dark = luminance(bg) < 0.5;
+// 应用页面颜色：模式决定背景与文字色系，配色对按模式取深/浅变体
+function applyTheme(mode, pair) {
+  const m = mode === 'light' ? 'light' : 'dark';
+  const p = THEME_PAIRS[pair] ? pair : 'purple';
+  const bg = BG_MODES[m].color;
+  const accent = accentOf(m, p);
+  const dark = m === 'dark';
   const root = document.documentElement.style;
   const n = parseInt(accent.slice(1), 16);
   root.setProperty('--accent', accent);
   root.setProperty('--accent-dark', shadeHex(accent, 0.72));
   root.setProperty('--accent-mid', shadeHex(accent, 0.85));
-  root.setProperty('--accent-light', dark ? shadeHex(accent, 1.45) : shadeHex(accent, 0.68));
+  root.setProperty('--accent-light', dark ? shadeHex(accent, 1.35) : shadeHex(accent, 0.68));
   root.setProperty('--accent-rgb', `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`);
   root.setProperty('--bg', bg);
   if (dark) {
@@ -503,8 +482,8 @@ function applyTheme(accent, bg) {
     root.setProperty('--text-faint', '#8a84a3');
   }
   try {
-    localStorage.setItem('grapenas_theme', accent);
-    localStorage.setItem('grapenas_bg', bg);
+    localStorage.setItem('grapenas_theme_mode', m);
+    localStorage.setItem('grapenas_theme_pair', p);
   } catch {
     /* 忽略 */
   }
@@ -513,9 +492,9 @@ function applyTheme(accent, bg) {
 // 启动时先用本地缓存立即上色，随后与服务端同步
 (function initTheme() {
   try {
-    const cachedAccent = localStorage.getItem('grapenas_theme');
-    const cachedBg = localStorage.getItem('grapenas_bg');
-    if (cachedAccent || cachedBg) applyTheme(cachedAccent || '#8b5cf6', cachedBg || '#100c1c');
+    const cachedMode = localStorage.getItem('grapenas_theme_mode');
+    const cachedPair = localStorage.getItem('grapenas_theme_pair');
+    if (cachedMode || cachedPair) applyTheme(cachedMode || 'dark', cachedPair || 'purple');
   } catch {
     /* 忽略 */
   }
@@ -524,9 +503,9 @@ function applyTheme(accent, bg) {
 async function syncTheme() {
   try {
     const t = await call('theme.get');
-    currentAccent = t.color;
-    currentBg = t.bg;
-    applyTheme(t.color, t.bg);
+    currentMode = t.mode;
+    currentPair = t.pair;
+    applyTheme(t.mode, t.pair);
   } catch {
     /* 忽略 */
   }
@@ -1227,14 +1206,6 @@ document.getElementById('storagePageForm').addEventListener('submit', (e) => {
 
 // ---- 面包屑折叠弹窗 ----
 document.getElementById('breadcrumbCloseBtn').addEventListener('click', closeModal);
-
-// ---- 页面颜色 ----
-document.getElementById('themeColorInput').addEventListener('change', (e) => {
-  saveTheme(e.target.value);
-});
-document.getElementById('bgColorInput').addEventListener('change', (e) => {
-  saveBg(e.target.value);
-});
 
 // ---- 移动 / 复制 ----
 document.getElementById('moveCopyConfirmBtn').addEventListener('click', async () => {

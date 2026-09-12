@@ -390,7 +390,7 @@ body {
 .crumb-modal-list .menu-item { justify-content: flex-start; padding: 12px 16px; }
 
 /* 主题色选择 */
-.theme-swatches { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+.theme-swatches { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 4px; }
 .theme-swatch {
   width: 40px;
   height: 40px;
@@ -402,16 +402,17 @@ body {
 }
 .theme-swatch:hover { transform: scale(1.08); }
 .theme-swatch.active { border-color: var(--text); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.35); }
-.theme-custom { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-2); }
-.theme-custom input[type="color"] {
-  width: 48px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid rgba(var(--accent-rgb), 0.35);
-  border-radius: 8px;
-  background: transparent;
+.mode-swatch {
+  padding: 10px 26px;
+  border-radius: 10px;
+  border: 2px solid transparent;
   cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  transition: transform 0.1s;
 }
+.mode-swatch:hover { transform: scale(1.05); }
+.mode-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.35); }
 
 /* 控制桌面 */
 .desktop-frame {

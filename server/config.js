@@ -13,8 +13,8 @@ const config = {
   accessCodeHash: null,
   accessCodeSalt: null,
   storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
-  themeColor: '#8b5cf6', // 主题色
-  bgColor: '#100c1c', // 背景色
+  themeMode: 'dark', // 背景模式：dark / light
+  themePair: 'purple', // 主题配色对：purple / blue / orange / yellow / mono
   desktopPath: null, // 桌面控制工具路径（默认 D:\code\webpg）
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
@@ -104,21 +104,17 @@ export function setStoragePath(p) {
   persist();
 }
 
-export function getThemeColor() {
-  return config.themeColor || '#8b5cf6';
+export function getThemeMode() {
+  return config.themeMode === 'light' ? 'light' : 'dark';
 }
 
-export function setThemeColor(color) {
-  config.themeColor = color;
-  persist();
+export function getThemePair() {
+  return config.themePair || 'purple';
 }
 
-export function getBgColor() {
-  return config.bgColor || '#100c1c';
-}
-
-export function setBgColor(color) {
-  config.bgColor = color;
+export function setTheme(mode, pair) {
+  if (mode != null) config.themeMode = mode;
+  if (pair != null) config.themePair = pair;
   persist();
 }
 
