@@ -281,7 +281,9 @@ async function handleRequest(req, res) {
     // 并把葡萄云的页面颜色同步到工具页面（同源 iframe，读取父页面 CSS 变量）
     const desktopExtra =
       '<style>#toolbar .brand,#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
-      '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}</style>' +
+      '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}' +
+      'select,input[type="password"]{background:var(--panel) !important;}button{background:var(--panel) !important;}' +
+      '</style>' +
       '<script>(function(){' +
       'function sync(){try{' +
       'var s=parent.document.documentElement.style;' +
