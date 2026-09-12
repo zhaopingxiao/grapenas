@@ -1,5 +1,5 @@
-// 控制桌面：管理 webpg 桌面控制工具子进程（仅 Windows）
-// 原理：webpg 持续截屏以 JPEG 串流推给浏览器，浏览器回传鼠标/键盘事件注入系统。
+// 控制桌面：管理内置桌面控制模块（desktop/）的子进程（仅 Windows）
+// 原理：持续截屏以 JPEG 串流推给浏览器，浏览器回传鼠标/键盘事件注入系统；
 // 葡萄云把它作为内部子服务拉起，并通过 /desktop 内部代理 + iframe 呈现。
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -7,12 +7,11 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getDesktopPath } from './config.js';
 import { findPidByPort } from './apps.js';
 import { log } from './logger.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const DEFAULT_TOOL_PATH = 'D:\\code\\webpg';
+const TOOL_PATH = path.join(ROOT, 'desktop');
 const DESKTOP_PORT = 18000;
 
 let child = null;
@@ -25,7 +24,7 @@ export function desktopSupported() {
 }
 
 export function desktopToolPath() {
-  return getDesktopPath() || DEFAULT_TOOL_PATH;
+  return TOOL_PATH;
 }
 
 function toolOk() {

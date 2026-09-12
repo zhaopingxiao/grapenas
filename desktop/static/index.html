@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Web Desktop 远程控制</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header id="toolbar">
+    <div class="brand">
+      <span id="statusDot" class="dot"></span>
+      <span>Web Desktop</span>
+    </div>
+    <div class="controls">
+      <label class="field">屏幕
+        <select id="monitorSelect"></select>
+      </label>
+      <label class="field">画质
+        <input id="qualityRange" type="range" min="20" max="95" step="5" value="70" />
+        <span id="qualityValue" class="value">70</span>
+      </label>
+      <label class="field">帧率
+        <input id="fpsRange" type="range" min="5" max="60" step="5" value="30" />
+        <span id="fpsValue" class="value">30</span>
+      </label>
+      <label class="field">缩放
+        <select id="scaleSelect">
+          <option value="1">100%</option>
+          <option value="0.75">75%</option>
+          <option value="0.5">50%</option>
+          <option value="0.35">35%</option>
+        </select>
+      </label>
+      <button id="fitBtn" class="active" title="在适应窗口和原始大小之间切换">适应窗口</button>
+      <button id="fullscreenBtn">全屏</button>
+      <button id="disconnectBtn">断开</button>
+    </div>
+    <div id="stats" class="stats">未连接</div>
+  </header>
+
+  <main id="stage">
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="remoteCursor" class="remote-cursor"></div>
+    <div id="keyHint" class="key-hint">点击画面后可用键盘控制</div>
+  </main>
+
+  <div id="overlay" class="overlay">
+    <div class="panel">
+      <h1>Web Desktop</h1>
+      <p id="overlayMsg">请输入访问令牌以连接</p>
+      <input id="tokenInput" type="password" placeholder="访问令牌" autocomplete="off" spellcheck="false" />
+      <button id="connectBtn" class="primary">连接</button>
+      <p class="hint">令牌在服务端启动时打印，也可用 --token 参数固定</p>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

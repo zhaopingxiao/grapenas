@@ -1,0 +1,6 @@
+{
+  "name": "grapenas-desktop",
+  "private": true,
+  "type": "commonjs",
+  "description": "葡萄云内置桌面控制模块（由 server/desktop.js 托管为子服务）"
+}

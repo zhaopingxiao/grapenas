@@ -15,7 +15,6 @@ const config = {
   storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
   themeMode: 'dark', // 背景模式：dark / light
   themePair: 'purple', // 主题配色对：purple / blue / orange / yellow / mono
-  desktopPath: null, // 桌面控制工具路径（默认 D:\code\webpg）
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
 };
@@ -115,14 +114,5 @@ export function getThemePair() {
 export function setTheme(mode, pair) {
   if (mode != null) config.themeMode = mode;
   if (pair != null) config.themePair = pair;
-  persist();
-}
-
-export function getDesktopPath() {
-  return config.desktopPath;
-}
-
-export function setDesktopPath(p) {
-  config.desktopPath = p;
   persist();
 }

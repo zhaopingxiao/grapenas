@@ -1,0 +1,257 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0e14;
+  --panel: #141924;
+  --border: #232a38;
+  --text: #e6e6e6;
+  --muted: #8b93a7;
+  --accent: #4c8dff;
+  --ok: #3ecf8e;
+  --err: #ff5d5d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+}
+
+#toolbar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--err);
+  box-shadow: 0 0 6px currentColor;
+  transition: background 0.2s;
+}
+
+.dot.online {
+  background: var(--ok);
+}
+
+.dot.connecting {
+  background: #e0a03a;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.field .value {
+  min-width: 24px;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+select,
+input[type="password"] {
+  background: #0e131d;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+select:focus,
+input[type="password"]:focus {
+  border-color: var(--accent);
+}
+
+input[type="range"] {
+  width: 90px;
+  accent-color: var(--accent);
+}
+
+button {
+  background: #1c2333;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  padding: 8px 16px;
+}
+
+.stats {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#stage {
+  position: fixed;
+  inset: 46px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background: #05070b;
+}
+
+#screen {
+  outline: none;
+  cursor: none;
+  background: #000;
+  box-shadow: 0 0 0 1px var(--border);
+  image-rendering: auto;
+}
+
+.remote-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+  z-index: 60;
+  display: none;
+}
+
+.key-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  background: rgba(20, 25, 36, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.key-hint.show {
+  opacity: 1;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 11, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.panel {
+  width: min(360px, calc(100vw - 40px));
+  padding: 26px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  text-align: center;
+}
+
+.panel h1 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.panel p {
+  margin: 8px 0;
+  color: var(--muted);
+}
+
+.panel input[type="password"] {
+  width: 100%;
+  margin: 10px 0;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+.panel button {
+  width: 100%;
+}
+
+.panel .hint {
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  #toolbar {
+    height: auto;
+    padding: 6px 10px;
+    gap: 10px;
+  }
+
+  #stage {
+    inset: 92px 0 0 0;
+  }
+
+  .stats {
+    display: none;
+  }
+}
