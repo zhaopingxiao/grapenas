@@ -277,10 +277,24 @@ async function handleRequest(req, res) {
     if (!desktopStatus().running) return sendJson(res, 503, { ok: false, error: '桌面控制服务未启动' });
     const dRule = desktopRule();
     if (pathname === dRule.path) return redirect(res, '/desktop/');
-    // 只保留显示器选择，隐藏品牌标识/画质/帧率/缩放与操作按钮
+    // 只保留显示器选择，隐藏品牌标识/画质/帧率/缩放与操作按钮；
+    // 并把葡萄云的页面颜色同步到工具页面（同源 iframe，读取父页面 CSS 变量）
     const desktopExtra =
       '<style>#toolbar .brand,#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
-      '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}</style>';
+      '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}</style>' +
+      '<script>(function(){' +
+      'function sync(){try{' +
+      'var s=parent.document.documentElement.style;' +
+      'var v=function(n,f){var x=s.getPropertyValue(n).trim();return x||f;};' +
+      'var d=document.documentElement.style;' +
+      'd.setProperty("--bg",v("--bg","#0b0e14"));' +
+      'd.setProperty("--panel",v("--bg-panel","#141924"));' +
+      'd.setProperty("--text",v("--text","#e6e6e6"));' +
+      'd.setProperty("--muted",v("--text-muted","#8b93a7"));' +
+      'd.setProperty("--accent",v("--accent","#4c8dff"));' +
+      'd.setProperty("--border","rgba("+v("--accent-rgb","35, 42, 56")+", 0.25)");' +
+      '}catch(e){}}' +
+      'sync();setInterval(sync,800);})();<\/script>';
     return proxyHttpRequest(req, res, dRule, toTargetPath(dRule, pathname, url.search), desktopExtra);
   }
 

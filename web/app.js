@@ -316,13 +316,13 @@ const BG_MODES = {
   dark: { name: '深色', color: '#100c1c' },
   light: { name: '浅色', color: '#f4f4f8' },
 };
-// 主题配色对：深色背景用浅色变体，浅色背景用深色变体
+// 主题配色对：紫/蓝/橙/黄为固定色；黑白随背景切换（深色配白、浅色配黑）
 const THEME_PAIRS = {
-  purple: { name: '紫', dark: '#7c3aed', light: '#c4b5fd' },
-  blue: { name: '蓝', dark: '#2563eb', light: '#93c5fd' },
-  orange: { name: '橙', dark: '#ea580c', light: '#fdba74' },
-  yellow: { name: '黄', dark: '#ca8a04', light: '#fde047' },
-  mono: { name: '黑白', dark: '#111111', light: '#ffffff' },
+  purple: { name: '紫', fixed: '#8b5cf6' },
+  blue: { name: '蓝', fixed: '#3b82f6' },
+  orange: { name: '橙', fixed: '#f97316' },
+  yellow: { name: '黄', fixed: '#eab308' },
+  mono: { name: '黑白', dark: '#ffffff', light: '#111111' },
 };
 
 let currentMode = 'dark';
@@ -354,7 +354,8 @@ async function loadThemeColorView() {
 
 function accentOf(mode, pair) {
   const def = THEME_PAIRS[pair] || THEME_PAIRS.purple;
-  return mode === 'dark' ? def.light : def.dark;
+  if (def.fixed) return def.fixed;
+  return mode === 'dark' ? def.dark : def.light;
 }
 
 function renderModeSwatches() {
