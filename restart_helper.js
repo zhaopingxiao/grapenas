@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 9643;
 const LOG = path.join(ROOT, 'data', 'grapenas.log');
+// 服务端启动助手时传入自己的 PID；没有时退回按端口查找
+const pidArg = parseInt(process.argv[2], 10);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -49,6 +51,7 @@ function run(cmd, args) {
 
 async function findServerPid() {
   if (!(await portOpen())) return null;
+  if (Number.isInteger(pidArg)) return pidArg;
   try {
     if (process.platform === 'win32') {
       const out = await run('netstat', ['-ano']);
@@ -59,6 +62,18 @@ async function findServerPid() {
         }
       }
       return null;
+    }
+    // Linux：优先 ss（iproute2 自带），没有时退回 lsof
+    try {
+      const out = await run('ss', ['-ltnp']);
+      for (const line of out.split(/\r?\n/)) {
+        if (!line.includes(`:${PORT} `)) continue;
+        const m = line.match(/pid=(\d+)/);
+        if (m) return parseInt(m[1], 10);
+      }
+      return null;
+    } catch {
+      /* 没有 ss */
     }
     const out = await run('lsof', ['-iTCP:9643', '-sTCP:LISTEN', '-t']);
     const pids = out.split(/\s+/).map(Number).filter((n) => Number.isInteger(n));

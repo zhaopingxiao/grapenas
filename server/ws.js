@@ -414,8 +414,9 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function restartServer() {
   log('info', '收到重启请求，正在重启葡萄云…');
-  // 重启助手为独立 Node 进程（process.execPath 即当前 node，无需额外运行时）
-  const helper = spawn(process.execPath, ['restart_helper.js'], {
+  // 重启助手为独立 Node 进程（process.execPath 即当前 node，无需额外运行时）；
+  // 把当前服务进程 PID 直接传给助手，避免依赖 lsof/netstat 查找端口占用进程
+  const helper = spawn(process.execPath, ['restart_helper.js', String(process.pid)], {
     cwd: ROOT,
     detached: true,
     stdio: 'ignore',
