@@ -56,6 +56,13 @@ export function revokeToken(token) {
   tokens.delete(token);
 }
 
+// 撤销所有已签发的授权（所有设备都需要重新输入访问码）
+export function revokeAllTokens() {
+  const count = tokens.size;
+  tokens.clear();
+  return count;
+}
+
 // 定期清理过期令牌
 setInterval(() => {
   const now = Date.now();

@@ -78,17 +78,11 @@ body {
 }
 .conn { font-size: 12px; color: #f87171; padding: 0 8px; }
 .conn.ok { color: #4ade80; }
-.logout {
-  padding: 10px;
-  border: 1px solid rgba(var(--accent-rgb), 0.3);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.logout:hover { background: rgba(var(--accent-rgb), 0.12); color: var(--text); }
+
+/* 危险操作区（撤销授权等） */
+.danger-zone { margin-top: 18px; border-color: rgba(248, 113, 113, 0.35); }
+.danger-zone h3 { margin: 0 0 8px; font-size: 15px; }
+.danger-zone .muted { margin: 0 0 14px; font-size: 13px; }
 
 /* 内容区 */
 .content { flex: 1; padding: 28px 32px; min-width: 0; }

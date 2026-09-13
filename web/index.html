@@ -33,7 +33,6 @@
     </nav>
     <div class="sidebar-footer">
       <div id="connStatus" class="conn">连接中…</div>
-      <button id="logoutBtn" class="logout">退出登录</button>
     </div>
   </aside>
 
@@ -180,6 +179,11 @@
           <button class="btn primary" type="submit">修改访问码</button>
         </form>
       </div>
+      <div class="panel-card danger-zone">
+        <h3>撤销授权</h3>
+        <p class="muted">撤销后，所有已登录的设备都需要重新输入访问码。</p>
+        <button id="revokeAuthBtn" class="btn danger" type="button">撤销访问码授权</button>
+      </div>
     </section>
 
     <!-- 反向代理 -->
@@ -307,6 +311,15 @@
     <div class="form-actions">
       <button class="btn danger" id="confirmOkBtn">确定重启</button>
       <button class="btn" id="confirmCancelBtn">取消</button>
+    </div>
+  </div>
+  <!-- 弹窗：撤销访问码授权确认 -->
+  <div class="modal hidden" id="modalRevoke">
+    <h3>撤销访问码授权</h3>
+    <p class="confirm-text">撤销后所有已登录设备都需要重新输入访问码。确定要撤销吗？</p>
+    <div class="form-actions">
+      <button class="btn danger" id="revokeOkBtn">确定撤销</button>
+      <button class="btn" id="revokeCancelBtn" type="button">取消</button>
     </div>
   </div>
 </div>
