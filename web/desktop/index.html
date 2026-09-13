@@ -45,6 +45,27 @@
     <div id="keyHint" class="key-hint">点击画面后可用键盘控制</div>
   </main>
 
+  <!-- 悬浮窗：桌面快捷方式（拖桌面图标到这里添加） -->
+  <aside id="dock" class="dock hidden">
+    <div class="dock-head">桌面快捷方式</div>
+    <div id="dockList" class="dock-list"></div>
+    <div id="dockEmpty" class="dock-empty">把桌面图标拖到这里</div>
+  </aside>
+
+  <!-- 拖入图标后的菜单 -->
+  <div id="dropMenu" class="drop-menu hidden">
+    <div id="dropMenuName" class="drop-menu-title"></div>
+    <button id="dropMenuAdd" class="primary">将应用作为应用页快捷方式</button>
+  </div>
+
+  <!-- 另一个页面正在控制桌面 -->
+  <div id="lockOverlay" class="overlay hidden">
+    <div class="panel">
+      <p id="lockMsg">另一个网页正在控制桌面</p>
+      <p class="lock-sub">关闭其他控制页面后将自动接管</p>
+    </div>
+  </div>
+
   <div id="overlay" class="overlay">
     <div class="panel">
       <p id="overlayMsg">正在连接…</p>

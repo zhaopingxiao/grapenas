@@ -32,6 +32,10 @@ const DEFAULTS = {
 const grabber = new ScreenGrabber();
 const input = new InputController();
 
+// 单控制者：同一时间只允许一个页面控制桌面，其余排队等待
+let controller = null;
+const waiters = new Set();
+
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
 }
@@ -139,6 +143,7 @@ class Session {
     this.lastStats = performance.now();
     this.closed = false;
     this.cursorTimer = 0;
+    this.baseAttached = false;
   }
 
   // 光标位置/形状主动推送（比客户端轮询少一个请求往返，延迟更低）
@@ -160,7 +165,28 @@ class Session {
     }
   }
 
+  // 只有控制者才处理输入消息；等待者只挂基础连接事件
+  attachBase() {
+    if (this.baseAttached) return;
+    this.baseAttached = true;
+    this.ws.on("close", () => this.cleanup());
+    this.ws.on("error", () => this.cleanup());
+  }
+
+  // 等待者：另一个页面正在控制桌面
+  wait() {
+    this.attachBase();
+    this.sendJson({ t: "locked" });
+  }
+
+  // 等待者被提升为控制者
+  promote() {
+    if (this.closed) return;
+    this.start();
+  }
+
   start() {
+    this.attachBase();
     this.ws.on("message", (data, isBinary) => {
       if (isBinary) return;
       let message;
@@ -175,8 +201,6 @@ class Session {
         /* ignore bad input */
       }
     });
-    this.ws.on("close", () => this.cleanup());
-    this.ws.on("error", () => this.cleanup());
     this.startCursorPush();
     this.loop().catch(() => this.cleanup());
   }
@@ -204,6 +228,19 @@ class Session {
       case "settings":
         this.handleSettings(message);
         break;
+      case "icon.pick": {
+        // 拖拽到悬浮窗后：识别该点是否为桌面 .lnk 图标
+        const x = this.region.left + Number(message.x) * (this.region.width - 1);
+        const y = this.region.top + Number(message.y) * (this.region.height - 1);
+        const info = input.desktopIconAt(x, y);
+        this.sendJson({
+          t: "icon",
+          found: Boolean(info),
+          name: info ? info.name : null,
+          lnk: info ? info.lnk : null,
+        });
+        break;
+      }
       case "cursor": {
         const pos = input.cursorInfo(this.region);
         if (pos) {
@@ -362,6 +399,21 @@ class Session {
     }
     this.pressedKeys.clear();
     this.pressedButtons.clear();
+    // 控制者退出：让第一个等待者接管
+    waiters.delete(this);
+    if (controller === this) {
+      controller = null;
+      const next = waiters.values().next().value;
+      if (next && !next.closed) {
+        waiters.delete(next);
+        controller = next;
+        try {
+          next.promote();
+        } catch (err) {
+          /* ignore */
+        }
+      }
+    }
   }
 }
 
@@ -400,7 +452,14 @@ function main() {
       ws.close(4003);
       return;
     }
-    new Session(ws).start();
+    const session = new Session(ws);
+    if (controller && !controller.closed && controller.ws.readyState === WebSocket.OPEN) {
+      waiters.add(session);
+      session.wait();
+    } else {
+      controller = session;
+      session.start();
+    }
   });
 
   const banner = [

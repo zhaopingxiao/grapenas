@@ -17,6 +17,7 @@ const config = {
   themePair: 'purple', // 主题配色对：purple / blue / orange / yellow / mono
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
+  shortcuts: [], // 桌面快捷方式: [{ id, name, lnk }]
 };
 
 export function loadConfig() {
@@ -101,6 +102,31 @@ export function getStoragePath() {
 export function setStoragePath(p) {
   config.storagePath = p;
   persist();
+}
+
+// ---- 桌面快捷方式（应用页图标，指向桌面 .lnk） ----
+
+export function getShortcuts() {
+  return config.shortcuts || [];
+}
+
+export function findShortcut(id) {
+  return (config.shortcuts || []).find((s) => s.id === id);
+}
+
+export function addShortcut(shortcut) {
+  if (!config.shortcuts) config.shortcuts = [];
+  config.shortcuts.push(shortcut);
+  persist();
+}
+
+export function removeShortcut(id) {
+  const list = config.shortcuts || [];
+  const idx = list.findIndex((s) => s.id === id);
+  if (idx === -1) return false;
+  list.splice(idx, 1);
+  persist();
+  return true;
 }
 
 export function getThemeMode() {

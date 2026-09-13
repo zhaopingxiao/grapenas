@@ -94,6 +94,13 @@ function handleEvent(msg) {
     currentPair = msg.data.pair;
     applyTheme(msg.data.mode, msg.data.pair);
   }
+  if (msg.event === 'shortcuts') {
+    if (state.view === 'apps') loadApps();
+    const frame = document.querySelector('.desktop-frame');
+    if (frame && frame.contentWindow && typeof frame.contentWindow.desktopRefreshDock === 'function') {
+      frame.contentWindow.desktopRefreshDock();
+    }
+  }
 }
 
 // 控制桌面入口仅 Windows 显示
@@ -859,11 +866,13 @@ async function loadAccessCode() {
 // ---------- 应用 ----------
 
 let lastApps = [];
+let lastShortcuts = [];
 const installing = new Map(); // id -> meta（本地"安装中"状态）
 
 async function loadApps() {
   try {
-    renderApps(await call('apps.list'));
+    const [apps, shortcuts] = await Promise.all([call('apps.list'), call('shortcuts.list')]);
+    renderApps(apps, shortcuts);
   } catch (err) {
     toast(err.message, true);
   }
@@ -891,18 +900,59 @@ function gearSvg(size) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true"><path d="${ICONS.gear}"/></svg>`;
 }
 
-function renderApps(apps = lastApps) {
+function renderApps(apps = lastApps, shortcuts = lastShortcuts) {
   lastApps = apps;
+  lastShortcuts = shortcuts;
   const grid = document.getElementById('appGrid');
   grid.innerHTML = '';
   for (const app of apps) grid.appendChild(buildTile(app));
   for (const [id, meta] of installing) grid.appendChild(buildInstallingTile(id, meta));
-  if (!apps.length && !installing.size) {
+  for (const sc of shortcuts) grid.appendChild(buildShortcutTile(sc));
+  if (!apps.length && !installing.size && !shortcuts.length) {
     const empty = document.createElement('div');
     empty.className = 'app-empty';
     empty.textContent = '暂无应用，点右上角"添加应用"拖入应用包';
     grid.appendChild(empty);
   }
+}
+
+// 桌面快捷方式磁贴（不是真实应用）：点击打开对应程序并跳到控制桌面页
+const SHORTCUT_BADGE =
+  'M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7H5V5z';
+
+function buildShortcutTile(sc) {
+  const tile = document.createElement('div');
+  tile.className = 'app-tile shortcut';
+  tile.title = `桌面快捷方式：${sc.lnk || ''}\n点击打开并进入控制桌面`;
+
+  const icon = document.createElement('div');
+  icon.className = 'tile-icon';
+  const av = document.createElement('div');
+  av.className = 'tile-avatar';
+  av.textContent = (sc.name || '?').slice(0, 1).toUpperCase();
+  icon.appendChild(av);
+
+  const badge = document.createElement('span');
+  badge.className = 'tile-badge';
+  badge.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="${SHORTCUT_BADGE}"/></svg>`;
+  icon.appendChild(badge);
+
+  tile.appendChild(icon);
+  const name = document.createElement('div');
+  name.className = 'tile-name';
+  name.textContent = sc.name;
+  tile.appendChild(name);
+
+  tile.addEventListener('click', async () => {
+    try {
+      await call('shortcuts.launch', { id: sc.id });
+      toast(`正在打开「${sc.name}」`);
+      switchView('desktop');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  return tile;
 }
 
 function buildIconContent(app) {

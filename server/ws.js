@@ -2,11 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, PORT } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -299,6 +300,52 @@ const handlers = {
     for (const app of getApps()) markAppStopping(app.id);
     restartServer();
     return { restarting: true };
+  },
+
+  // ---- 桌面快捷方式（应用页图标，指向桌面 .lnk） ----
+  'shortcuts.list': () => getShortcuts(),
+
+  'shortcuts.add': (data) => {
+    const name = String(data.name || '').trim();
+    const lnk = String(data.lnk || '').trim();
+    if (!name || !lnk) throw new Error('缺少快捷方式信息');
+    if (!lnk.toLowerCase().endsWith('.lnk')) throw new Error('仅支持 .lnk 快捷方式');
+    if (!fs.existsSync(lnk)) throw new Error('快捷方式文件不存在');
+    if (getShortcuts().some((s) => s.lnk.toLowerCase() === lnk.toLowerCase())) {
+      throw new Error('该快捷方式已添加');
+    }
+    const id = 'sc_' + crypto.randomBytes(6).toString('hex');
+    addShortcut({ id, name, lnk });
+    log('info', `已添加桌面快捷方式: ${name}`);
+    broadcastEvent('shortcuts', getShortcuts());
+    return { id };
+  },
+
+  'shortcuts.remove': (data) => {
+    const id = String(data.id || '');
+    const sc = findShortcut(id);
+    if (!sc) throw new Error('未找到该快捷方式');
+    removeShortcut(id);
+    log('info', `已删除桌面快捷方式: ${sc.name}`);
+    broadcastEvent('shortcuts', getShortcuts());
+    return { removed: true };
+  },
+
+  'shortcuts.launch': (data) => {
+    const sc = findShortcut(String(data.id || ''));
+    if (!sc) throw new Error('未找到该快捷方式');
+    if (process.platform !== 'win32') throw new Error('仅 Windows 支持打开桌面快捷方式');
+    if (!fs.existsSync(sc.lnk)) throw new Error('快捷方式文件不存在，可能已被删除');
+    // 用 explorer 打开（ShellExecute 语义）；服务端可能无控制台，cmd start 会静默失败
+    const child = spawn('explorer.exe', [sc.lnk], {
+      windowsHide: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', (err) => log('error', `打开快捷方式失败: ${err.message}`));
+    child.unref();
+    log('info', `打开桌面快捷方式: ${sc.name}`);
+    return { launched: true };
   },
 
   // ---- 控制桌面 ----

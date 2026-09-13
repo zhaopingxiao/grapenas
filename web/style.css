@@ -280,6 +280,29 @@ body {
 .app-tile.stopped .tile-icon { filter: grayscale(1) brightness(0.55); }
 .app-tile.stopped:hover .tile-icon { filter: grayscale(0.5) brightness(1.25); }
 
+/* 桌面快捷方式磁贴（非真实应用，点击打开并跳到控制桌面） */
+.app-tile.shortcut .tile-avatar {
+  background: linear-gradient(135deg, var(--bg-elevated), var(--bg));
+  border: 2px solid rgba(var(--accent-rgb), 0.55);
+  color: var(--accent-light);
+}
+.app-tile.shortcut:hover .tile-icon { filter: brightness(1.25); }
+.tile-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  background: var(--bg-elevated);
+  color: var(--accent-light);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
 /* 安装中 */
 .app-tile.installing .tile-icon { filter: brightness(0.85); }
 .app-empty {

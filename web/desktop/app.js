@@ -21,6 +21,13 @@
   const fpsRange = $("fpsRange");
   const fpsValue = $("fpsValue");
   const scaleSelect = $("scaleSelect");
+  const dock = $("dock");
+  const dockList = $("dockList");
+  const dockEmpty = $("dockEmpty");
+  const dropMenu = $("dropMenu");
+  const dropMenuName = $("dropMenuName");
+  const dropMenuAdd = $("dropMenuAdd");
+  const lockOverlay = $("lockOverlay");
 
   const state = {
     ws: null,
@@ -43,6 +50,9 @@
     moveScheduled: false,
     pendingMove: null,
     frameChain: Promise.resolve(),
+    drag: { active: false, frozen: false, start: null },
+    dropPoint: null,
+    pendingPick: null,
     touch: {
       active: false,
       multi: false,
@@ -168,6 +178,8 @@
       setStatus("offline");
       releaseKeys();
       remoteCursor.style.display = "none";
+      lockOverlay.classList.add("hidden");
+      hideDock();
       if (state.manualClose) {
         showOverlay("连接已断开");
         return;
@@ -202,6 +214,8 @@
         state.connected = true;
         setStatus("online");
         overlay.classList.add("hidden");
+        lockOverlay.classList.add("hidden");
+        showDock();
         startPing();
         canvas.focus();
         if (document.activeElement !== canvas) keyHint.classList.add("show");
@@ -221,6 +235,16 @@
         } else {
           placeCursor(message.nx, message.ny, message.shape);
         }
+        break;
+      case "locked":
+        state.connected = false;
+        setStatus("offline");
+        remoteCursor.style.display = "none";
+        hideDock();
+        lockOverlay.classList.remove("hidden");
+        break;
+      case "icon":
+        handleIconResult(message);
         break;
       case "error":
         showOverlay(message.message || "服务端错误");
@@ -259,6 +283,8 @@
   // ------------------------------------------------------------------- inputs
 
   canvas.addEventListener("mousemove", (event) => {
+    // 拖到悬浮窗上方时冻结远程拖拽，避免桌面图标被拖走
+    if (state.drag.active && state.drag.frozen) return;
     state.pendingMove = { x: event.clientX, y: event.clientY };
     if (state.moveScheduled) return;
     state.moveScheduled = true;
@@ -279,15 +305,48 @@
     const p = norm(event.clientX, event.clientY);
     sendMouse("down", { b: button, x: p.x, y: p.y });
     state.buttonsDown.add(button);
+    if (button === "left") {
+      state.drag = { active: true, frozen: false, start: p };
+    }
+  });
+
+  // 拖拽过程中：指针移到悬浮窗上则进入冻结（不再把移动发给远程）
+  document.addEventListener("mousemove", (event) => {
+    if (!state.drag.active) return;
+    const over = isOverDock(event.clientX, event.clientY);
+    if (over !== state.drag.frozen) {
+      state.drag.frozen = over;
+      dock.classList.toggle("drop-active", over);
+    }
   });
 
   window.addEventListener("mouseup", (event) => {
     const button = BUTTONS[event.button];
-    if (!button || !state.buttonsDown.has(button)) return;
+    if (!button || !state.buttonsDown.has(button)) {
+      resetDrag();
+      return;
+    }
+    if (button === "left" && state.drag.active && isOverDock(event.clientX, event.clientY)) {
+      // 放到悬浮窗：先把远程指针移回按下时的位置再松开（图标归位），再请求识别
+      const start = state.drag.start;
+      sendMouse("up", { b: "left", x: start.x, y: start.y });
+      state.buttonsDown.delete(button);
+      state.dropPoint = { x: event.clientX, y: event.clientY };
+      send({ t: "icon.pick", x: start.x, y: start.y });
+      resetDrag();
+      return;
+    }
     const p = norm(event.clientX, event.clientY);
     sendMouse("up", { b: button, x: p.x, y: p.y });
     state.buttonsDown.delete(button);
+    resetDrag();
   });
+
+  function resetDrag() {
+    state.drag.active = false;
+    state.drag.frozen = false;
+    dock.classList.remove("drop-active");
+  }
 
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
@@ -448,6 +507,143 @@
   function sendSettings(partial) {
     send(Object.assign({ t: "settings" }, partial));
   }
+
+  // ---- 悬浮窗：桌面快捷方式（拖桌面图标上去添加） ----
+
+  // 通过外层葡萄云页面调用 NAS 接口（同源 iframe，直接调父页面的 call）
+  function parentCall(type, data) {
+    try {
+      if (window.parent && window.parent !== window && typeof window.parent.call === "function") {
+        return window.parent.call(type, data);
+      }
+    } catch (err) {
+      /* 跨域等异常 */
+    }
+    return Promise.reject(new Error("无法访问外层页面"));
+  }
+
+  function isOverDock(clientX, clientY) {
+    if (dock.classList.contains("hidden")) return false;
+    const rect = dock.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+  }
+
+  function showDock() {
+    dock.classList.remove("hidden");
+    loadDock();
+  }
+
+  function hideDock() {
+    dock.classList.add("hidden");
+    dock.classList.remove("drop-active");
+  }
+
+  async function loadDock() {
+    try {
+      const items = await parentCall("shortcuts.list");
+      renderDock(Array.isArray(items) ? items : []);
+    } catch (err) {
+      hideDock();
+    }
+  }
+  window.desktopRefreshDock = loadDock;
+
+  const TRASH_SVG =
+    "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
+
+  function renderDock(items) {
+    dockList.innerHTML = "";
+    if (!items.length) {
+      dockEmpty.textContent = "把桌面图标拖到这里";
+      dockEmpty.style.display = "";
+    } else {
+      dockEmpty.style.display = "none";
+    }
+    for (const sc of items) {
+      const item = document.createElement("div");
+      item.className = "dock-item";
+      const label = document.createElement("span");
+      label.className = "dock-item-name";
+      label.textContent = sc.name;
+      item.appendChild(label);
+
+      const del = document.createElement("button");
+      del.className = "dock-del";
+      del.title = "删除这个快捷方式";
+      del.innerHTML =
+        '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="' +
+        TRASH_SVG +
+        '"/></svg>';
+      del.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try {
+          await parentCall("shortcuts.remove", { id: sc.id });
+          loadDock();
+        } catch (err) {
+          showDockHint(err.message || "删除失败");
+        }
+      });
+      item.appendChild(del);
+      dockList.appendChild(item);
+    }
+  }
+
+  let dockHintTimer = 0;
+
+  function showDockHint(text) {
+    dockEmpty.textContent = text;
+    dockEmpty.style.display = "";
+    clearTimeout(dockHintTimer);
+    dockHintTimer = setTimeout(() => {
+      if (dockList.children.length) {
+        dockEmpty.style.display = "none";
+      } else {
+        dockEmpty.textContent = "把桌面图标拖到这里";
+      }
+    }, 2600);
+  }
+
+  function handleIconResult(message) {
+    if (message.found && message.lnk) {
+      state.pendingPick = { name: message.name, lnk: message.lnk };
+      dropMenuName.textContent = message.name;
+      dropMenu.classList.remove("hidden");
+      const rect = dropMenu.getBoundingClientRect();
+      const pt = state.dropPoint || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      const x = Math.min(Math.max(8, pt.x - rect.width / 2), window.innerWidth - rect.width - 8);
+      const y = Math.min(Math.max(8, pt.y - rect.height - 14), window.innerHeight - rect.height - 8);
+      dropMenu.style.left = x + "px";
+      dropMenu.style.top = y + "px";
+    } else if (message.found) {
+      showDockHint("只能添加 .lnk 快捷方式");
+    } else {
+      showDockHint("没有识别到桌面图标");
+    }
+  }
+
+  dropMenuAdd.addEventListener("click", async () => {
+    const pick = state.pendingPick;
+    dropMenu.classList.add("hidden");
+    state.pendingPick = null;
+    if (!pick) return;
+    try {
+      await parentCall("shortcuts.add", { name: pick.name, lnk: pick.lnk });
+      try {
+        if (typeof window.parent.toast === "function") window.parent.toast("已添加到应用页");
+      } catch (err) {
+        /* 忽略 */
+      }
+      loadDock();
+    } catch (err) {
+      showDockHint(err.message || "添加失败");
+    }
+  });
+
+  document.addEventListener("mousedown", (event) => {
+    if (!dropMenu.classList.contains("hidden") && !dropMenu.contains(event.target)) {
+      dropMenu.classList.add("hidden");
+    }
+  });
 
   monitorSelect.addEventListener("change", () =>
     sendSettings({ monitor: Number(monitorSelect.value) })
