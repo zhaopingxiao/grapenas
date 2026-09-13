@@ -302,6 +302,25 @@ body {
   justify-content: center;
   pointer-events: none;
 }
+/* 快捷方式磁贴右上角垃圾桶（hover 显示，触屏常显） */
+.tile-del {
+  position: absolute;
+  top: -6px;
+  right: 20px;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  background: var(--bg-elevated);
+  color: var(--accent-light);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.app-tile:hover .tile-del { display: inline-flex; }
+.tile-del:hover { background: rgba(248, 113, 113, 0.25); color: #f87171; }
+@media (hover: none) { .tile-del { display: inline-flex; } }
 
 /* 安装中 */
 .app-tile.installing .tile-icon { filter: brightness(0.85); }

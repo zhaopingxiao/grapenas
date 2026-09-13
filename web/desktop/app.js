@@ -21,12 +21,10 @@
   const fpsRange = $("fpsRange");
   const fpsValue = $("fpsValue");
   const scaleSelect = $("scaleSelect");
-  const dock = $("dock");
-  const dockList = $("dockList");
-  const dockEmpty = $("dockEmpty");
-  const dropMenu = $("dropMenu");
-  const dropMenuName = $("dropMenuName");
-  const dropMenuAdd = $("dropMenuAdd");
+  const shortcutBtn = $("shortcutBtn");
+  const shortcutPanel = $("shortcutPanel");
+  const shortcutClose = $("shortcutClose");
+  const shortcutList = $("shortcutList");
   const lockOverlay = $("lockOverlay");
 
   const state = {
@@ -50,9 +48,6 @@
     moveScheduled: false,
     pendingMove: null,
     frameChain: Promise.resolve(),
-    drag: { active: false, frozen: false, start: null },
-    dropPoint: null,
-    pendingPick: null,
     touch: {
       active: false,
       multi: false,
@@ -179,7 +174,6 @@
       releaseKeys();
       remoteCursor.style.display = "none";
       lockOverlay.classList.add("hidden");
-      hideDock();
       if (state.manualClose) {
         showOverlay("连接已断开");
         return;
@@ -215,7 +209,6 @@
         setStatus("online");
         overlay.classList.add("hidden");
         lockOverlay.classList.add("hidden");
-        showDock();
         startPing();
         canvas.focus();
         if (document.activeElement !== canvas) keyHint.classList.add("show");
@@ -240,11 +233,11 @@
         state.connected = false;
         setStatus("offline");
         remoteCursor.style.display = "none";
-        hideDock();
+        shortcutPanel.classList.add("hidden");
         lockOverlay.classList.remove("hidden");
         break;
-      case "icon":
-        handleIconResult(message);
+      case "desktop.shortcuts":
+        renderShortcutPanel(message.items || []);
         break;
       case "error":
         showOverlay(message.message || "服务端错误");
@@ -283,8 +276,6 @@
   // ------------------------------------------------------------------- inputs
 
   canvas.addEventListener("mousemove", (event) => {
-    // 拖到悬浮窗上方时冻结远程拖拽，避免桌面图标被拖走
-    if (state.drag.active && state.drag.frozen) return;
     state.pendingMove = { x: event.clientX, y: event.clientY };
     if (state.moveScheduled) return;
     state.moveScheduled = true;
@@ -305,48 +296,15 @@
     const p = norm(event.clientX, event.clientY);
     sendMouse("down", { b: button, x: p.x, y: p.y });
     state.buttonsDown.add(button);
-    if (button === "left") {
-      state.drag = { active: true, frozen: false, start: p };
-    }
-  });
-
-  // 拖拽过程中：指针移到悬浮窗上则进入冻结（不再把移动发给远程）
-  document.addEventListener("mousemove", (event) => {
-    if (!state.drag.active) return;
-    const over = isOverDock(event.clientX, event.clientY);
-    if (over !== state.drag.frozen) {
-      state.drag.frozen = over;
-      dock.classList.toggle("drop-active", over);
-    }
   });
 
   window.addEventListener("mouseup", (event) => {
     const button = BUTTONS[event.button];
-    if (!button || !state.buttonsDown.has(button)) {
-      resetDrag();
-      return;
-    }
-    if (button === "left" && state.drag.active && isOverDock(event.clientX, event.clientY)) {
-      // 放到悬浮窗：先把远程指针移回按下时的位置再松开（图标归位），再请求识别
-      const start = state.drag.start;
-      sendMouse("up", { b: "left", x: start.x, y: start.y });
-      state.buttonsDown.delete(button);
-      state.dropPoint = { x: event.clientX, y: event.clientY };
-      send({ t: "icon.pick", x: start.x, y: start.y });
-      resetDrag();
-      return;
-    }
+    if (!button || !state.buttonsDown.has(button)) return;
     const p = norm(event.clientX, event.clientY);
     sendMouse("up", { b: button, x: p.x, y: p.y });
     state.buttonsDown.delete(button);
-    resetDrag();
   });
-
-  function resetDrag() {
-    state.drag.active = false;
-    state.drag.frozen = false;
-    dock.classList.remove("drop-active");
-  }
 
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
@@ -508,7 +466,7 @@
     send(Object.assign({ t: "settings" }, partial));
   }
 
-  // ---- 悬浮窗：桌面快捷方式（拖桌面图标上去添加） ----
+  // ---- 桌面快捷方式面板（点击添加到应用页） ----
 
   // 通过外层葡萄云页面调用 NAS 接口（同源 iframe，直接调父页面的 call）
   function parentCall(type, data) {
@@ -522,128 +480,81 @@
     return Promise.reject(new Error("无法访问外层页面"));
   }
 
-  function isOverDock(clientX, clientY) {
-    if (dock.classList.contains("hidden")) return false;
-    const rect = dock.getBoundingClientRect();
-    return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
-  }
+  let shortcutAdded = new Set(); // 已添加的 lnk 路径（小写）
 
-  function showDock() {
-    dock.classList.remove("hidden");
-    loadDock();
-  }
-
-  function hideDock() {
-    dock.classList.add("hidden");
-    dock.classList.remove("drop-active");
-  }
-
-  async function loadDock() {
+  async function openShortcutPanel() {
+    shortcutPanel.classList.remove("hidden");
+    shortcutList.innerHTML = '<div class="shortcut-empty">正在读取…</div>';
     try {
-      const items = await parentCall("shortcuts.list");
-      renderDock(Array.isArray(items) ? items : []);
+      const list = await parentCall("shortcuts.list");
+      shortcutAdded = new Set((list || []).map((s) => String(s.lnk || "").toLowerCase()));
     } catch (err) {
-      hideDock();
+      shortcutAdded = new Set();
     }
+    send({ t: "desktop.shortcuts" });
   }
-  window.desktopRefreshDock = loadDock;
 
-  const TRASH_SVG =
-    "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
-
-  function renderDock(items) {
-    dockList.innerHTML = "";
+  function renderShortcutPanel(items) {
+    shortcutList.innerHTML = "";
     if (!items.length) {
-      dockEmpty.textContent = "把桌面图标拖到这里";
-      dockEmpty.style.display = "";
-    } else {
-      dockEmpty.style.display = "none";
+      shortcutList.innerHTML = '<div class="shortcut-empty">没有找到桌面快捷方式</div>';
+      return;
     }
-    for (const sc of items) {
-      const item = document.createElement("div");
-      item.className = "dock-item";
-      const label = document.createElement("span");
-      label.className = "dock-item-name";
-      label.textContent = sc.name;
-      item.appendChild(label);
-
-      const del = document.createElement("button");
-      del.className = "dock-del";
-      del.title = "删除这个快捷方式";
-      del.innerHTML =
-        '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="' +
-        TRASH_SVG +
-        '"/></svg>';
-      del.addEventListener("click", async (event) => {
-        event.stopPropagation();
-        try {
-          await parentCall("shortcuts.remove", { id: sc.id });
-          loadDock();
-        } catch (err) {
-          showDockHint(err.message || "删除失败");
-        }
-      });
-      item.appendChild(del);
-      dockList.appendChild(item);
-    }
-  }
-
-  let dockHintTimer = 0;
-
-  function showDockHint(text) {
-    dockEmpty.textContent = text;
-    dockEmpty.style.display = "";
-    clearTimeout(dockHintTimer);
-    dockHintTimer = setTimeout(() => {
-      if (dockList.children.length) {
-        dockEmpty.style.display = "none";
-      } else {
-        dockEmpty.textContent = "把桌面图标拖到这里";
+    const groups = [
+      { scope: "user", label: "当前用户桌面" },
+      { scope: "common", label: "公用桌面" },
+    ];
+    for (const group of groups) {
+      const rows = items.filter((item) => item.scope === group.scope);
+      if (!rows.length) continue;
+      const head = document.createElement("div");
+      head.className = "shortcut-group";
+      head.textContent = group.label;
+      shortcutList.appendChild(head);
+      for (const item of rows) {
+        const added = shortcutAdded.has(String(item.lnk).toLowerCase());
+        const row = document.createElement("button");
+        row.className = "shortcut-item" + (added ? " added" : "");
+        const name = document.createElement("span");
+        name.className = "shortcut-name";
+        name.textContent = item.name;
+        name.title = item.lnk;
+        const tip = document.createElement("span");
+        tip.className = "shortcut-tip";
+        tip.textContent = added ? "已添加" : "点击添加";
+        row.append(name, tip);
+        row.disabled = added;
+        row.addEventListener("click", async () => {
+          try {
+            await parentCall("shortcuts.add", { name: item.name, lnk: item.lnk });
+            shortcutAdded.add(String(item.lnk).toLowerCase());
+            row.classList.add("added");
+            row.disabled = true;
+            tip.textContent = "已添加";
+            try {
+              if (typeof window.parent.toast === "function") window.parent.toast(`已添加「${item.name}」`);
+            } catch (err) {
+              /* 忽略 */
+            }
+          } catch (err) {
+            tip.textContent = err.message || "添加失败";
+          }
+        });
+        shortcutList.appendChild(row);
       }
-    }, 2600);
-  }
-
-  function handleIconResult(message) {
-    if (message.found && message.lnk) {
-      state.pendingPick = { name: message.name, lnk: message.lnk };
-      dropMenuName.textContent = message.name;
-      dropMenu.classList.remove("hidden");
-      const rect = dropMenu.getBoundingClientRect();
-      const pt = state.dropPoint || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-      const x = Math.min(Math.max(8, pt.x - rect.width / 2), window.innerWidth - rect.width - 8);
-      const y = Math.min(Math.max(8, pt.y - rect.height - 14), window.innerHeight - rect.height - 8);
-      dropMenu.style.left = x + "px";
-      dropMenu.style.top = y + "px";
-    } else if (message.found) {
-      showDockHint("只能添加 .lnk 快捷方式");
-    } else {
-      showDockHint("没有识别到桌面图标");
     }
   }
 
-  dropMenuAdd.addEventListener("click", async () => {
-    const pick = state.pendingPick;
-    dropMenu.classList.add("hidden");
-    state.pendingPick = null;
-    if (!pick) return;
-    try {
-      await parentCall("shortcuts.add", { name: pick.name, lnk: pick.lnk });
-      try {
-        if (typeof window.parent.toast === "function") window.parent.toast("已添加到应用页");
-      } catch (err) {
-        /* 忽略 */
-      }
-      loadDock();
-    } catch (err) {
-      showDockHint(err.message || "添加失败");
-    }
-  });
+  // 外层应用页删除快捷方式后，若面板开着则刷新"已添加"状态
+  window.desktopRefreshShortcuts = () => {
+    if (!shortcutPanel.classList.contains("hidden")) openShortcutPanel();
+  };
 
-  document.addEventListener("mousedown", (event) => {
-    if (!dropMenu.classList.contains("hidden") && !dropMenu.contains(event.target)) {
-      dropMenu.classList.add("hidden");
-    }
+  shortcutBtn.addEventListener("click", () => {
+    if (shortcutPanel.classList.contains("hidden")) openShortcutPanel();
+    else shortcutPanel.classList.add("hidden");
   });
+  shortcutClose.addEventListener("click", () => shortcutPanel.classList.add("hidden"));
 
   monitorSelect.addEventListener("change", () =>
     sendSettings({ monitor: Number(monitorSelect.value) })
@@ -751,7 +662,12 @@
 
   function placeCursor(nx, ny, shape) {
     const rect = canvas.getBoundingClientRect();
+    // 光标随桌面显示比例缩放（系统光标约 32 物理像素）
+    const ratio = state.bitmap ? rect.width / state.bitmap.width : 1;
+    const size = Math.max(10, Math.round(32 * ratio));
     remoteCursor.style.display = "block";
+    remoteCursor.style.width = size + "px";
+    remoteCursor.style.height = size + "px";
     remoteCursor.style.transform =
       "translate(" + Math.round(rect.left + nx * rect.width) + "px, " +
       Math.round(rect.top + ny * rect.height) + "px)";

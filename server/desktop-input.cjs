@@ -5,7 +5,6 @@ const path = require("path");
 const koffi = require("koffi");
 
 const user32 = koffi.load("user32.dll");
-const kernel32 = koffi.load("kernel32.dll");
 const shell32 = koffi.load("shell32.dll");
 
 // Make this process DPI-aware so cursor coordinates match the physical
@@ -231,107 +230,61 @@ function vkFromChar(char) {
   return result & 0xff || null;
 }
 
-// ------------------------------------------------- 桌面图标识别（拖拽添加用）
+// ------------------------------------------------- 桌面快捷方式列表
 
-const FindWindowW = user32.func("uintptr_t __stdcall FindWindowW(str16 lpClassName, str16 lpWindowName)");
-const FindWindowExW = user32.func(
-  "uintptr_t __stdcall FindWindowExW(uintptr_t hWndParent, uintptr_t hWndChildAfter, str16 lpszClass, str16 lpszWindow)"
-);
-const EnumWindowsProc = koffi.proto("bool __stdcall EnumWindowsProc(uintptr_t hwnd, intptr_t lParam)");
-const EnumWindows = user32.func("bool __stdcall EnumWindows(EnumWindowsProc *cb, intptr_t lParam)");
-const WindowFromPoint = user32.func("uintptr_t __stdcall WindowFromPoint(POINT pt)");
-const GetWindowThreadProcessId = user32.func(
-  "uint32 __stdcall GetWindowThreadProcessId(uintptr_t hwnd, _Out_ uint32 *lpdwProcessId)"
-);
-const ClientToScreen = user32.func("bool __stdcall ClientToScreen(uintptr_t hwnd, _Inout_ POINT *lpPoint)");
-const SendMessageTimeoutW = user32.func(
-  "uintptr_t __stdcall SendMessageTimeoutW(uintptr_t hwnd, uint32 msg, uintptr_t wParam, intptr_t lParam, uint32 fuFlags, uint32 uTimeout, _Out_ uintptr_t *lpdwResult)"
-);
 const SHGetFolderPathW = shell32.func(
   "int __stdcall SHGetFolderPathW(uintptr_t hwnd, int csidl, uintptr_t hToken, uint32 dwFlags, _Out_ uint16 *pszPath)"
 );
 
-const OpenProcess = kernel32.func(
-  "uintptr_t __stdcall OpenProcess(uint32 dwDesiredAccess, bool bInheritHandle, uint32 dwProcessId)"
-);
-const VirtualAllocEx = kernel32.func(
-  "uintptr_t __stdcall VirtualAllocEx(uintptr_t hProcess, uintptr_t lpAddress, size_t dwSize, uint32 flAllocationType, uint32 flProtect)"
-);
-const VirtualFreeEx = kernel32.func(
-  "bool __stdcall VirtualFreeEx(uintptr_t hProcess, uintptr_t lpAddress, size_t dwSize, uint32 dwFreeType)"
-);
-const WriteProcessMemory = kernel32.func(
-  "bool __stdcall WriteProcessMemory(uintptr_t hProcess, uintptr_t lpBaseAddress, const void *lpBuffer, size_t nSize, void *lpNumberOfBytesWritten)"
-);
-const ReadProcessMemory = kernel32.func(
-  "bool __stdcall ReadProcessMemory(uintptr_t hProcess, uintptr_t lpBaseAddress, void *lpBuffer, size_t nSize, void *lpNumberOfBytesRead)"
-);
-const CloseHandle = kernel32.func("bool __stdcall CloseHandle(uintptr_t hObject)");
-
-const LVM_FIRST = 0x1000;
-const LVM_HITTEST = LVM_FIRST + 18; // 0x1012
-const LVM_GETITEMTEXTW = LVM_FIRST + 115; // 0x1073
-const LVIF_TEXT = 0x0001;
-const SMTO_ABORTIFHUNG = 0x0002;
-const PROCESS_VM_ACCESS = 0x0008 | 0x0010 | 0x0020; // OPERATION | READ | WRITE
-const MEM_COMMIT_RESERVE = 0x1000 | 0x2000;
-const MEM_RELEASE = 0x8000;
-const PAGE_READWRITE = 0x04;
 const CSIDL_DESKTOPDIRECTORY = 0x0010;
 const CSIDL_COMMON_DESKTOPDIRECTORY = 0x0019;
 
-// 桌面图标所在的 ListView（普通情况在 Progman 下；壁纸轮播时在某个 WorkerW 下）
-function findDesktopListView() {
+// 取桌面文件夹路径（用户桌面 / 公用桌面），缓存
+const desktopDirCache = new Map();
+function desktopDir(csidl) {
+  if (desktopDirCache.has(csidl)) return desktopDirCache.get(csidl);
+  let result = null;
   try {
-    const progman = FindWindowW("Progman", "Program Manager");
-    let defView = progman ? FindWindowExW(progman, 0, "SHELLDLL_DefView", null) : 0;
-    if (!defView) {
-      EnumWindows((hwnd) => {
-        const dv = FindWindowExW(hwnd, 0, "SHELLDLL_DefView", null);
-        if (dv) {
-          defView = dv;
-          return false;
-        }
-        return true;
-      }, 0);
+    const buf = Buffer.alloc(520);
+    if (SHGetFolderPathW(0, csidl, 0, 0, buf) === 0) {
+      const p = buf.toString("utf16le").replace(/\0[\s\S]*$/, "").trim();
+      if (p) result = p;
     }
-    if (!defView) return 0;
-    return FindWindowExW(defView, 0, "SysListView32", "FolderView") || 0;
   } catch (err) {
-    return 0;
+    /* 忽略 */
   }
+  desktopDirCache.set(csidl, result);
+  return result;
 }
 
-// 桌面文件夹（用户桌面 + 公共桌面），缓存
-let desktopDirsCache = null;
-function desktopDirs() {
-  if (desktopDirsCache) return desktopDirsCache;
-  const dirs = [];
-  for (const csidl of [CSIDL_DESKTOPDIRECTORY, CSIDL_COMMON_DESKTOPDIRECTORY]) {
+// 列出用户桌面 + 公用桌面中的所有 .lnk 快捷方式
+function listDesktopShortcuts() {
+  const items = [];
+  const seen = new Set();
+  const scopes = [
+    { scope: "user", csidl: CSIDL_DESKTOPDIRECTORY },
+    { scope: "common", csidl: CSIDL_COMMON_DESKTOPDIRECTORY },
+  ];
+  for (const { scope, csidl } of scopes) {
+    const dir = desktopDir(csidl);
+    if (!dir) continue;
+    let entries = [];
     try {
-      const buf = Buffer.alloc(520);
-      if (SHGetFolderPathW(0, csidl, 0, 0, buf) === 0) {
-        const p = buf.toString("utf16le").replace(/\0[\s\S]*$/, "").trim();
-        if (p) dirs.push(p);
-      }
+      entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch (err) {
-      /* 忽略单个目录失败 */
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".lnk")) continue;
+      const lnk = path.join(dir, entry.name);
+      const key = lnk.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ name: entry.name.replace(/\.lnk$/i, ""), lnk, scope });
     }
   }
-  desktopDirsCache = dirs;
-  return dirs;
-}
-
-function resolveDesktopLnk(name) {
-  for (const dir of desktopDirs()) {
-    const p = path.join(dir, name + ".lnk");
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch (err) {
-      /* 忽略 */
-    }
-  }
-  return null;
+  items.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+  return items;
 }
 
 class InputController {
@@ -360,73 +313,6 @@ class InputController {
     const flags = BUTTON_FLAGS[name];
     if (!flags) return;
     sendMouseInput(flags[0], XBUTTON_DATA[name] || 0);
-  }
-
-  // 该屏幕坐标下是否是桌面图标；返回 { name, lnk }（lnk 为 null 表示非 .lnk 文件）
-  // 通过向 explorer 的桌面 ListView 发 LVM_HITTEST / LVM_GETITEMTEXTW 实现，
-  // 消息里的指针需要落在目标进程内存中，故用 VirtualAllocEx + 读写进程内存。
-  desktopIconAt(screenX, screenY) {
-    const listview = findDesktopListView();
-    if (!listview) return null;
-    const pt = { x: Math.round(screenX), y: Math.round(screenY) };
-    if (Number(WindowFromPoint(pt)) !== Number(listview)) return null;
-
-    const origin = { x: 0, y: 0 };
-    if (!ClientToScreen(listview, origin)) return null;
-    const clientX = pt.x - origin.x;
-    const clientY = pt.y - origin.y;
-
-    const pidOut = [0];
-    GetWindowThreadProcessId(listview, pidOut);
-    const pid = pidOut[0];
-    if (!pid) return null;
-    const hProc = OpenProcess(PROCESS_VM_ACCESS, false, pid);
-    if (!hProc) return null;
-
-    let remote = 0;
-    try {
-      remote = Number(VirtualAllocEx(hProc, 0, 1024, MEM_COMMIT_RESERVE, PAGE_READWRITE));
-      if (!remote) return null;
-      const resultBuf = Buffer.alloc(8);
-
-      // 1) 命中测试：LVHITTESTINFO { POINT pt; UINT flags; int iItem; ... }
-      const hitBuf = Buffer.alloc(24);
-      hitBuf.writeInt32LE(clientX, 0);
-      hitBuf.writeInt32LE(clientY, 4);
-      if (!WriteProcessMemory(hProc, remote, hitBuf, 24, null)) return null;
-      SendMessageTimeoutW(listview, LVM_HITTEST, 0, remote, SMTO_ABORTIFHUNG, 1000, resultBuf);
-      const hitBack = Buffer.alloc(24);
-      if (!ReadProcessMemory(hProc, remote, hitBack, 24, null)) return null;
-      const index = hitBack.readInt32LE(12);
-      if (index < 0) return null;
-
-      // 2) 取图标文字：LVITEMW 与文本缓冲都放目标进程
-      const itemRemote = remote + 128;
-      const textRemote = remote + 256;
-      const lvitem = Buffer.alloc(88);
-      lvitem.writeUInt32LE(LVIF_TEXT, 0);
-      lvitem.writeInt32LE(index, 4);
-      lvitem.writeInt32LE(0, 8);
-      lvitem.writeBigUInt64LE(BigInt(textRemote), 24);
-      lvitem.writeInt32LE(260, 32);
-      if (!WriteProcessMemory(hProc, itemRemote, lvitem, 88, null)) return null;
-      SendMessageTimeoutW(listview, LVM_GETITEMTEXTW, index, itemRemote, SMTO_ABORTIFHUNG, 1000, resultBuf);
-      const textBuf = Buffer.alloc(520);
-      if (!ReadProcessMemory(hProc, textRemote, textBuf, 520, null)) return null;
-      const name = textBuf.toString("utf16le").replace(/\0[\s\S]*$/, "").trim();
-      if (!name) return null;
-
-      return { name, lnk: resolveDesktopLnk(name) };
-    } catch (err) {
-      return null;
-    } finally {
-      try {
-        if (remote) VirtualFreeEx(hProc, remote, 0, MEM_RELEASE);
-      } catch (err) {
-        /* 忽略 */
-      }
-      CloseHandle(hProc);
-    }
   }
 
   releaseButton(name) {
@@ -544,4 +430,5 @@ module.exports = {
   InputController,
   VK_MAP,
   vkFromChar,
+  listDesktopShortcuts,
 };

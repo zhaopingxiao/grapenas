@@ -97,8 +97,8 @@ function handleEvent(msg) {
   if (msg.event === 'shortcuts') {
     if (state.view === 'apps') loadApps();
     const frame = document.querySelector('.desktop-frame');
-    if (frame && frame.contentWindow && typeof frame.contentWindow.desktopRefreshDock === 'function') {
-      frame.contentWindow.desktopRefreshDock();
+    if (frame && frame.contentWindow && typeof frame.contentWindow.desktopRefreshShortcuts === 'function') {
+      frame.contentWindow.desktopRefreshShortcuts();
     }
   }
 }
@@ -152,6 +152,11 @@ const NAV_OF = {
 };
 
 function switchView(view) {
+  // 离开控制桌面：销毁 iframe，断开桌面连接（不继续占用控制者名额）
+  if (state.view === 'desktop' && view !== 'desktop') {
+    const desktopBody = document.getElementById('desktopBody');
+    if (desktopBody) desktopBody.innerHTML = '';
+  }
   state.view = view;
   const activeNav = NAV_OF[view] || view;
   document.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === activeNav));
@@ -936,6 +941,23 @@ function buildShortcutTile(sc) {
   badge.className = 'tile-badge';
   badge.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="${SHORTCUT_BADGE}"/></svg>`;
   icon.appendChild(badge);
+
+  // 右上角垃圾桶：删除快捷方式
+  const del = document.createElement('button');
+  del.className = 'tile-del';
+  del.title = '删除快捷方式';
+  del.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="${ICONS.trash}"/></svg>`;
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      await call('shortcuts.remove', { id: sc.id });
+      toast(`已删除「${sc.name}」`);
+      loadApps();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  icon.appendChild(del);
 
   tile.appendChild(icon);
   const name = document.createElement('div');

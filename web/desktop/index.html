@@ -16,6 +16,7 @@
       <label class="field">屏幕
         <select id="monitorSelect"></select>
       </label>
+      <button id="shortcutBtn">设置应用为快捷方式</button>
       <label class="field">画质
         <input id="qualityRange" type="range" min="20" max="95" step="5" value="70" />
         <span id="qualityValue" class="value">70</span>
@@ -45,17 +46,13 @@
     <div id="keyHint" class="key-hint">点击画面后可用键盘控制</div>
   </main>
 
-  <!-- 悬浮窗：桌面快捷方式（拖桌面图标到这里添加） -->
-  <aside id="dock" class="dock hidden">
-    <div class="dock-head">桌面快捷方式</div>
-    <div id="dockList" class="dock-list"></div>
-    <div id="dockEmpty" class="dock-empty">把桌面图标拖到这里</div>
-  </aside>
-
-  <!-- 拖入图标后的菜单 -->
-  <div id="dropMenu" class="drop-menu hidden">
-    <div id="dropMenuName" class="drop-menu-title"></div>
-    <button id="dropMenuAdd" class="primary">将应用作为应用页快捷方式</button>
+  <!-- 桌面快捷方式列表（点击添加到应用页） -->
+  <div id="shortcutPanel" class="shortcut-panel hidden">
+    <div class="shortcut-head">
+      <span>桌面快捷方式</span>
+      <button id="shortcutClose" class="shortcut-close" title="关闭">×</button>
+    </div>
+    <div id="shortcutList" class="shortcut-list"></div>
   </div>
 
   <!-- 另一个页面正在控制桌面 -->

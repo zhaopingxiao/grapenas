@@ -18,7 +18,7 @@ const path = require("path");
 const express = require("express");
 const { WebSocketServer, WebSocket } = require("ws");
 
-const { ScreenGrabber, InputController, VK_MAP, vkFromChar } = require("./desktop-input.cjs");
+const { ScreenGrabber, InputController, VK_MAP, vkFromChar, listDesktopShortcuts } = require("./desktop-input.cjs");
 
 const STATIC_DIR = path.join(__dirname, "..", "web", "desktop");
 
@@ -228,17 +228,15 @@ class Session {
       case "settings":
         this.handleSettings(message);
         break;
-      case "icon.pick": {
-        // 拖拽到悬浮窗后：识别该点是否为桌面 .lnk 图标
-        const x = this.region.left + Number(message.x) * (this.region.width - 1);
-        const y = this.region.top + Number(message.y) * (this.region.height - 1);
-        const info = input.desktopIconAt(x, y);
-        this.sendJson({
-          t: "icon",
-          found: Boolean(info),
-          name: info ? info.name : null,
-          lnk: info ? info.lnk : null,
-        });
+      case "desktop.shortcuts": {
+        // 列出用户桌面 + 公用桌面中的所有 .lnk 快捷方式
+        let items = [];
+        try {
+          items = listDesktopShortcuts();
+        } catch (err) {
+          /* 返回空列表 */
+        }
+        this.sendJson({ t: "desktop.shortcuts", items });
         break;
       }
       case "cursor": {
@@ -441,6 +439,11 @@ function main() {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
   wss.on("connection", (ws, req) => {
+    // 心跳标记：浏览器崩溃/断网时回收死连接，避免一直占着控制者名额
+    ws.isAlive = true;
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
     let provided = "";
     try {
       provided = new URL(req.url, "http://localhost").searchParams.get("token") || "";
@@ -461,6 +464,26 @@ function main() {
       session.start();
     }
   });
+
+  const heartbeat = setInterval(() => {
+    for (const client of wss.clients) {
+      if (client.isAlive === false) {
+        try {
+          client.terminate();
+        } catch (err) {
+          /* ignore */
+        }
+        continue;
+      }
+      client.isAlive = false;
+      try {
+        client.ping();
+      } catch (err) {
+        /* ignore */
+      }
+    }
+  }, 30000);
+  wss.on("close", () => clearInterval(heartbeat));
 
   const banner = [
     "",
