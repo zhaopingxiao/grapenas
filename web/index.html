@@ -322,6 +322,19 @@
       <button class="btn" id="revokeCancelBtn" type="button">取消</button>
     </div>
   </div>
+
+  <!-- 弹窗：应用窗口查看（快捷方式启动后实时采集） -->
+  <div class="modal hidden" id="modalAppView">
+    <div class="app-view-head">
+      <h3 id="appViewTitle">应用</h3>
+      <span id="appViewStatus" class="app-view-status">启动中…</span>
+      <button class="btn" id="appViewClose" type="button">关闭</button>
+    </div>
+    <div class="app-view-stage">
+      <canvas id="appViewCanvas"></canvas>
+      <div id="appViewHint" class="app-view-hint">启动中…</div>
+    </div>
+  </div>
 </div>
 <div id="toast" class="toast hidden"></div>
 <script src="/app.js"></script>

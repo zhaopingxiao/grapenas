@@ -283,7 +283,7 @@ body {
 .app-tile.shortcut:hover .tile-icon { filter: brightness(1.25); }
 .tile-badge {
   position: absolute;
-  top: -6px;
+  bottom: -6px;
   right: -6px;
   width: 22px;
   height: 22px;
@@ -300,7 +300,7 @@ body {
 .tile-del {
   position: absolute;
   top: -6px;
-  right: 20px;
+  right: -6px;
   width: 24px;
   height: 24px;
   border-radius: 8px;
@@ -394,6 +394,50 @@ body {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 .modal h3 { font-size: 16px; margin-bottom: 18px; }
+
+/* 应用窗口查看（快捷方式启动后的实时采集） */
+#modalAppView {
+  width: min(1200px, 94vw);
+  max-width: none;
+  padding: 18px;
+}
+.app-view-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.app-view-head h3 { margin: 0; flex: 1; font-size: 15px; }
+.app-view-status { font-size: 13px; color: var(--text-muted); }
+.app-view-status.running { color: #4ade80; }
+.app-view-status.error { color: #f87171; }
+.app-view-stage {
+  position: relative;
+  min-height: 300px;
+  max-height: 72vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b0e14;
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+#appViewCanvas {
+  display: none;
+  max-width: 100%;
+  max-height: 72vh;
+}
+.app-view-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
 
 /* 文件管理 */
 .file-toolbar { display: flex; gap: 8px; margin-bottom: 14px; }

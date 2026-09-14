@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync, spawn } = require("child_process");
 const koffi = require("koffi");
 
 const user32 = koffi.load("user32.dll");
@@ -16,7 +17,7 @@ try {
   /* already set or unavailable */
 }
 
-const { Monitor } = require("node-screenshots");
+const { Monitor, Window } = require("node-screenshots");
 const sharp = require("sharp");
 
 // ---------------------------------------------------------------- Win32 input
@@ -287,6 +288,114 @@ function listDesktopShortcuts() {
   return items;
 }
 
+// ------------------------------------------------- 应用窗口（快捷方式启动与窗口采集）
+
+// 解析 .lnk 指向的目标程序路径（PowerShell WScript.Shell，带缓存）
+const lnkTargetCache = new Map();
+function resolveLnkTarget(lnk) {
+  if (lnkTargetCache.has(lnk)) return lnkTargetCache.get(lnk);
+  let target = null;
+  try {
+    const psPath = "'" + String(lnk).replace(/'/g, "''") + "'";
+    const ps = `(New-Object -ComObject WScript.Shell).CreateShortcut(${psPath}).TargetPath`;
+    const out = execFileSync("powershell", ["-NoProfile", "-Command", ps], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 8000,
+    });
+    target = out.trim() || null;
+  } catch (err) {
+    target = null;
+  }
+  lnkTargetCache.set(lnk, target);
+  return target;
+}
+
+// 按可执行文件名查进程 PID（tasklist）
+function findPidsByExe(exeName) {
+  try {
+    const out = execFileSync(
+      "tasklist",
+      ["/FI", `IMAGENAME eq ${exeName}`, "/FO", "CSV", "/NH"],
+      { encoding: "utf8", windowsHide: true, timeout: 8000 }
+    );
+    const want = exeName.toLowerCase();
+    return [...out.matchAll(/"([^"]+)","(\d+)"/g)]
+      .filter((m) => m[1].toLowerCase() === want)
+      .map((m) => Number(m[2]));
+  } catch (err) {
+    return [];
+  }
+}
+
+// 某个程序对应的可见窗口（优先非最小化、面积大）
+function findAppWindows(exeName) {
+  const pids = new Set(findPidsByExe(exeName));
+  if (!pids.size) return [];
+  return Window.all()
+    .filter((w) => pids.has(w.pid()) && !w.isMinimized() && w.width() > 60 && w.height() > 60)
+    .sort((a, b) => b.width() * b.height() - a.width() * a.height());
+}
+
+// 当前所有窗口 id（用于启动后比对"新出现的窗口"）
+function snapshotWindowIds() {
+  try {
+    return new Set(Window.all().map((w) => w.id()));
+  } catch (err) {
+    return new Set();
+  }
+}
+
+// 启动后新出现的窗口（目标程序是启动器时兜底）
+function findNewWindows(beforeIds) {
+  try {
+    return Window.all()
+      .filter(
+        (w) =>
+          !beforeIds.has(w.id()) &&
+          !w.isMinimized() &&
+          w.width() > 60 &&
+          w.height() > 60 &&
+          w.title()
+      )
+      .sort((a, b) => b.width() * b.height() - a.width() * a.height());
+  } catch (err) {
+    return [];
+  }
+}
+
+// 启动 .lnk（explorer 走 ShellExecute 语义）
+function launchShortcut(lnk) {
+  try {
+    const child = spawn("explorer.exe", [lnk], {
+      windowsHide: true,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => {});
+    child.unref();
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// 采集某个窗口为 JPEG（不依赖窗口是否在前台）
+async function grabWindowJpeg(win, quality = 75, maxWidth = 1280) {
+  const image = await win.captureImage();
+  const raw = await image.toRaw();
+  let width = image.width;
+  let height = image.height;
+  let pipeline = sharp(raw, { raw: { width, height, channels: 4 } });
+  if (width > maxWidth) {
+    height = Math.max(1, Math.round((height * maxWidth) / width));
+    width = maxWidth;
+    pipeline = pipeline.resize(width, height, { fit: "fill" });
+  }
+  const data = await pipeline.jpeg({ quality: Math.round(quality) }).toBuffer();
+  return { data, width, height };
+}
+
 class InputController {
   move(nx, ny, region) {
     const x = Math.round(region.left + Number(nx) * (region.width - 1));
@@ -431,4 +540,10 @@ module.exports = {
   VK_MAP,
   vkFromChar,
   listDesktopShortcuts,
+  resolveLnkTarget,
+  findAppWindows,
+  snapshotWindowIds,
+  findNewWindows,
+  launchShortcut,
+  grabWindowJpeg,
 };

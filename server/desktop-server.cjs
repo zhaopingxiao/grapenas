@@ -11,6 +11,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
@@ -18,7 +19,19 @@ const path = require("path");
 const express = require("express");
 const { WebSocketServer, WebSocket } = require("ws");
 
-const { ScreenGrabber, InputController, VK_MAP, vkFromChar, listDesktopShortcuts } = require("./desktop-input.cjs");
+const {
+  ScreenGrabber,
+  InputController,
+  VK_MAP,
+  vkFromChar,
+  listDesktopShortcuts,
+  resolveLnkTarget,
+  findAppWindows,
+  snapshotWindowIds,
+  findNewWindows,
+  launchShortcut,
+  grabWindowJpeg,
+} = require("./desktop-input.cjs");
 
 const STATIC_DIR = path.join(__dirname, "..", "web", "desktop");
 
@@ -415,6 +428,172 @@ class Session {
   }
 }
 
+// 应用窗口串流会话（mode=app）：只采集某个程序的窗口，不参与桌面控制者锁
+class AppSession {
+  constructor(ws) {
+    this.ws = ws;
+    this.closed = false;
+    this.ackResolve = null;
+    this.current = null; // { win, exeName, name }
+    this.openToken = 0;
+    this.frames = 0;
+    this.lastStats = performance.now();
+    this.lastSize = "";
+  }
+
+  start() {
+    this.ws.on("message", (data, isBinary) => {
+      if (isBinary) return;
+      let message;
+      try {
+        message = JSON.parse(data.toString());
+      } catch (err) {
+        return;
+      }
+      try {
+        this.handle(message);
+      } catch (err) {
+        /* ignore bad input */
+      }
+    });
+    this.ws.on("close", () => this.stop());
+    this.ws.on("error", () => this.stop());
+    this.sendJson({ t: "hello", mode: "app" });
+  }
+
+  stop() {
+    if (this.closed) return;
+    this.closed = true;
+    this.openToken += 1;
+    this.current = null;
+    if (this.ackResolve) this.ackResolve();
+  }
+
+  sendJson(message) {
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(message));
+    }
+  }
+
+  handle(message) {
+    switch (message.t) {
+      case "ack":
+        if (this.ackResolve) this.ackResolve();
+        break;
+      case "ping":
+        this.sendJson({ t: "pong", ts: message.ts });
+        break;
+      case "app.open":
+        this.open(String(message.lnk || ""), String(message.name || "")).catch(() => {});
+        break;
+      case "app.close":
+        this.openToken += 1;
+        this.current = null;
+        break;
+      default:
+        break;
+    }
+  }
+
+  waitAck(timeout) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.ackResolve = null;
+        resolve();
+      }, timeout);
+      this.ackResolve = () => {
+        clearTimeout(timer);
+        this.ackResolve = null;
+        resolve();
+      };
+    });
+  }
+
+  // 打开应用：已在运行直接进入采集；未运行则启动并等待窗口出现
+  async open(lnk, name) {
+    this.openToken += 1;
+    const token = this.openToken;
+    this.current = null;
+
+    if (!lnk.toLowerCase().endsWith(".lnk") || !fs.existsSync(lnk)) {
+      this.sendJson({ t: "error", message: "快捷方式文件不存在" });
+      return;
+    }
+
+    this.sendJson({ t: "app.state", state: "starting", name });
+    const target = resolveLnkTarget(lnk);
+    const exeName = target ? path.basename(target) : null;
+
+    // 已在运行：直接采集
+    let windows = exeName ? findAppWindows(exeName) : [];
+    if (windows.length) {
+      this.beginCapture(token, windows[0], exeName, name);
+      return;
+    }
+
+    // 启动并等待窗口
+    const before = snapshotWindowIds();
+    launchShortcut(lnk);
+    const deadline = Date.now() + 30000;
+    while (!this.closed && this.openToken === token && Date.now() < deadline) {
+      await sleep(600);
+      windows = exeName ? findAppWindows(exeName) : [];
+      if (!windows.length) windows = findNewWindows(before);
+      if (windows.length) {
+        this.beginCapture(token, windows[0], exeName, name);
+        return;
+      }
+    }
+    if (!this.closed && this.openToken === token) {
+      this.sendJson({ t: "app.state", state: "stopped", name, message: "未检测到应用窗口" });
+    }
+  }
+
+  beginCapture(token, win, exeName, name) {
+    this.current = { win, exeName, name };
+    this.lastSize = "";
+    this.sendJson({ t: "app.state", state: "running", name });
+    this.loop(token).catch(() => {});
+  }
+
+  async loop(token) {
+    while (!this.closed && this.openToken === token && this.current && this.ws.readyState === WebSocket.OPEN) {
+      const started = performance.now();
+      let frame;
+      try {
+        frame = await grabWindowJpeg(this.current.win, 75, 1280);
+      } catch (err) {
+        // 窗口可能已关闭或重建：按 exe 重新查找
+        const windows = this.current.exeName ? findAppWindows(this.current.exeName) : [];
+        if (!windows.length) {
+          this.sendJson({ t: "app.state", state: "stopped", name: this.current.name });
+          this.current = null;
+          break;
+        }
+        this.current.win = windows[0];
+        await sleep(300);
+        continue;
+      }
+      const sizeKey = frame.width + "x" + frame.height;
+      if (sizeKey !== this.lastSize) {
+        this.lastSize = sizeKey;
+        this.sendJson({ t: "app.size", width: frame.width, height: frame.height });
+      }
+      const ack = this.waitAck(1500);
+      this.ws.send(frame.data, { binary: true });
+      await ack;
+      this.frames += 1;
+      const now = performance.now();
+      if (now - this.lastStats >= 1000) {
+        this.sendJson({ t: "stats", fps: this.frames });
+        this.frames = 0;
+        this.lastStats = now;
+      }
+      await sleep(Math.max(0, 100 - (performance.now() - started))); // ~10fps
+    }
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -445,14 +624,22 @@ function main() {
       ws.isAlive = true;
     });
     let provided = "";
+    let mode = "";
     try {
-      provided = new URL(req.url, "http://localhost").searchParams.get("token") || "";
+      const url = new URL(req.url, "http://localhost");
+      provided = url.searchParams.get("token") || "";
+      mode = url.searchParams.get("mode") || "";
     } catch (err) {
       provided = "";
     }
     if (!token || !safeEqual(provided, token)) {
       ws.send(JSON.stringify({ t: "error", message: "访问令牌无效" }));
       ws.close(4003);
+      return;
+    }
+    // mode=app：应用窗口串流（不参与桌面控制者锁）
+    if (mode === "app") {
+      new AppSession(ws).start();
       return;
     }
     const session = new Session(ws);

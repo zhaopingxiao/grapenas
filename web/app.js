@@ -965,16 +965,126 @@ function buildShortcutTile(sc) {
   name.textContent = sc.name;
   tile.appendChild(name);
 
-  tile.addEventListener('click', async () => {
-    try {
-      await call('shortcuts.launch', { id: sc.id });
-      toast(`正在打开「${sc.name}」`);
-      switchView('desktop');
-    } catch (err) {
-      toast(err.message, true);
-    }
+  tile.addEventListener('click', () => {
+    openAppViewer(sc);
   });
   return tile;
+}
+
+// ---------- 应用窗口查看（快捷方式启动后实时采集该程序窗口） ----------
+
+let appViewer = { ws: null, frameChain: Promise.resolve() };
+
+async function openAppViewer(sc) {
+  closeAppViewer();
+  const title = document.getElementById('appViewTitle');
+  const status = document.getElementById('appViewStatus');
+  const canvas = document.getElementById('appViewCanvas');
+  const hint = document.getElementById('appViewHint');
+  title.textContent = sc.name;
+  status.textContent = '启动中…';
+  status.className = 'app-view-status';
+  hint.textContent = '启动中…';
+  hint.style.display = '';
+  canvas.style.display = 'none';
+  openModal('modalAppView');
+
+  let st;
+  try {
+    st = await call('desktop.status');
+    if (!st.supported) throw new Error('仅 Windows 支持查看应用窗口');
+    if (!st.running) st = await call('desktop.start');
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = 'app-view-status error';
+    hint.textContent = err.message;
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(
+    `${proto}://${location.host}/desktop/ws?token=${encodeURIComponent(st.token || '')}&mode=app`
+  );
+  appViewer.ws = ws;
+  ws.onopen = () => ws.send(JSON.stringify({ t: 'app.open', lnk: sc.lnk, name: sc.name }));
+  ws.onmessage = (event) => {
+    if (appViewer.ws !== ws) return;
+    if (typeof event.data === 'string') {
+      try {
+        handleAppViewMessage(JSON.parse(event.data));
+      } catch {
+        /* 忽略 */
+      }
+      return;
+    }
+    drawAppFrame(ws, event.data);
+  };
+  ws.onclose = () => {
+    if (appViewer.ws !== ws) return;
+    status.textContent = '连接已断开';
+    status.className = 'app-view-status error';
+  };
+}
+
+function handleAppViewMessage(msg) {
+  const status = document.getElementById('appViewStatus');
+  const hint = document.getElementById('appViewHint');
+  const canvas = document.getElementById('appViewCanvas');
+  if (msg.t === 'app.state') {
+    if (msg.state === 'starting') {
+      status.textContent = '启动中…';
+      status.className = 'app-view-status';
+      hint.textContent = '启动中…';
+      hint.style.display = '';
+    } else if (msg.state === 'running') {
+      status.textContent = '正在运行';
+      status.className = 'app-view-status running';
+    } else if (msg.state === 'stopped') {
+      status.textContent = '应用已关闭';
+      status.className = 'app-view-status error';
+      hint.textContent = msg.message || '应用已关闭';
+      hint.style.display = '';
+      canvas.style.display = 'none';
+    }
+  } else if (msg.t === 'app.size') {
+    canvas.width = msg.width;
+    canvas.height = msg.height;
+    canvas.style.display = 'block';
+    hint.style.display = 'none';
+  } else if (msg.t === 'error') {
+    status.textContent = msg.message || '出错了';
+    status.className = 'app-view-status error';
+  }
+}
+
+function drawAppFrame(ws, blob) {
+  appViewer.frameChain = appViewer.frameChain
+    .then(async () => {
+      const canvas = document.getElementById('appViewCanvas');
+      const bitmap = await createImageBitmap(blob);
+      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+      }
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      bitmap.close();
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ack' }));
+    })
+    .catch(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ack' }));
+    });
+}
+
+function closeAppViewer() {
+  if (appViewer.ws) {
+    const ws = appViewer.ws;
+    appViewer.ws = null;
+    try {
+      ws.close();
+    } catch (err) {
+      /* 忽略 */
+    }
+  }
 }
 
 function buildIconContent(app) {
@@ -1237,6 +1347,7 @@ function openModal(id) {
 }
 
 function closeModal() {
+  if (!document.getElementById('modalAppView').classList.contains('hidden')) closeAppViewer();
   document.getElementById('modalOverlay').classList.add('hidden');
 }
 
@@ -1464,6 +1575,8 @@ document.getElementById('openProxyModal').addEventListener('click', () => {
 });
 
 document.getElementById('proxyCancelBtn').addEventListener('click', closeModal);
+
+document.getElementById('appViewClose').addEventListener('click', closeModal);
 
 document.getElementById('modalOverlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
