@@ -31,8 +31,6 @@ const {
   findNewWindows,
   launchShortcut,
   grabWindowJpeg,
-  getWindowRect,
-  focusWindow,
 } = require("./desktop-input.cjs");
 
 const STATIC_DIR = path.join(__dirname, "..", "web", "desktop");
@@ -441,8 +439,6 @@ class AppSession {
     this.frames = 0;
     this.lastStats = performance.now();
     this.lastSize = "";
-    this.pressedButtons = new Set();
-    this.pressedKeys = new Set();
   }
 
   start() {
@@ -470,25 +466,7 @@ class AppSession {
     this.closed = true;
     this.openToken += 1;
     this.current = null;
-    this.releaseInput();
     if (this.ackResolve) this.ackResolve();
-  }
-
-  releaseInput() {
-    try {
-      input.releaseKeys(this.pressedKeys);
-    } catch (err) {
-      /* ignore */
-    }
-    for (const button of this.pressedButtons) {
-      try {
-        input.releaseButton(button);
-      } catch (err) {
-        /* ignore */
-      }
-    }
-    this.pressedKeys.clear();
-    this.pressedButtons.clear();
   }
 
   sendJson(message) {
@@ -511,78 +489,9 @@ class AppSession {
       case "app.close":
         this.openToken += 1;
         this.current = null;
-        this.releaseInput();
-        break;
-      case "app.mouse":
-        this.handleMouse(message);
-        break;
-      case "app.wheel":
-        this.handleWheel(message);
-        break;
-      case "app.key":
-        this.handleKey(message);
         break;
       default:
         break;
-    }
-  }
-
-  // ---- 窗口输入（全局输入：先带到前台，再注入鼠标/键盘） ----
-
-  windowScreenPoint(win, nx, ny) {
-    const rect = getWindowRect(win.id());
-    if (!rect) return null;
-    return {
-      x: Math.round(rect.left + Number(nx) * (rect.right - rect.left)),
-      y: Math.round(rect.top + Number(ny) * (rect.bottom - rect.top)),
-    };
-  }
-
-  handleMouse(message) {
-    const win = this.current && this.current.win;
-    if (!win) return;
-    const action = message.a;
-    const button = message.b || "left";
-    if (action === "down") {
-      focusWindow(win.id(), input);
-      this.pressedButtons.add(button);
-    }
-    const pos = this.windowScreenPoint(win, message.x, message.y);
-    if (!pos) return;
-    input.moveTo(pos.x, pos.y);
-    if (action === "down") input.pressButton(button);
-    else if (action === "up") {
-      input.releaseButton(button);
-      this.pressedButtons.delete(button);
-    }
-  }
-
-  handleWheel(message) {
-    const win = this.current && this.current.win;
-    if (!win) return;
-    const pos = this.windowScreenPoint(win, message.x, message.y);
-    if (!pos) return;
-    input.moveTo(pos.x, pos.y);
-    input.scroll(0, Number(message.dy || 0));
-  }
-
-  handleKey(message) {
-    const win = this.current && this.current.win;
-    if (!win) return;
-    const code = message.code || "";
-    const key = message.key || "";
-    let vk = VK_MAP[code];
-    if (vk === undefined && typeof key === "string" && key.length === 1) {
-      vk = vkFromChar(key);
-    }
-    if (vk === undefined || vk === null) return;
-    focusWindow(win.id(), input);
-    if (message.a === "down") {
-      input.keyDown(vk);
-      this.pressedKeys.add(vk);
-    } else {
-      input.keyUp(vk);
-      this.pressedKeys.delete(vk);
     }
   }
 
@@ -605,7 +514,6 @@ class AppSession {
     this.openToken += 1;
     const token = this.openToken;
     this.current = null;
-    this.releaseInput();
 
     if (!lnk.toLowerCase().endsWith(".lnk") || !fs.existsSync(lnk)) {
       this.sendJson({ t: "error", message: "快捷方式文件不存在" });

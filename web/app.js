@@ -981,10 +981,6 @@ async function openAppViewer(sc) {
   const status = document.getElementById('appViewStatus');
   const canvas = document.getElementById('appViewCanvas');
   const hint = document.getElementById('appViewHint');
-  const modal = document.getElementById('modalAppView');
-  const fullBtn = document.getElementById('appViewFull');
-  modal.classList.remove('app-view-full');
-  fullBtn.textContent = '全屏';
   title.textContent = sc.name;
   status.textContent = '启动中…';
   status.className = 'app-view-status';
@@ -992,7 +988,6 @@ async function openAppViewer(sc) {
   hint.style.display = '';
   canvas.style.display = 'none';
   openModal('modalAppView');
-  setTimeout(() => canvas.focus(), 200);
 
   let st;
   try {
@@ -1092,83 +1087,9 @@ function closeAppViewer() {
   }
 }
 
-// ---- 查看器交互：鼠标/滚轮/键盘转发到目标窗口（后台窗口可操作） ----
+// ---- 查看器：点击画面进入控制桌面页 ----
 
-const appCanvas = document.getElementById('appViewCanvas');
-const appButtonsDown = new Set();
-
-function appSend(message) {
-  const ws = appViewer.ws;
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
-}
-
-function appNorm(clientX, clientY) {
-  const rect = appCanvas.getBoundingClientRect();
-  const x = Math.min(Math.max((clientX - rect.left) / Math.max(1, rect.width), 0), 1);
-  const y = Math.min(Math.max((clientY - rect.top) / Math.max(1, rect.height), 0), 1);
-  return { x: Math.round(x * 100000) / 100000, y: Math.round(y * 100000) / 100000 };
-}
-
-function appButtonOf(event) {
-  return event.button === 0 ? 'left' : event.button === 2 ? 'right' : event.button === 1 ? 'middle' : null;
-}
-
-appCanvas.addEventListener('mousemove', (e) => {
-  const p = appNorm(e.clientX, e.clientY);
-  appSend({ t: 'app.mouse', a: 'move', x: p.x, y: p.y });
-});
-
-appCanvas.addEventListener('mousedown', (e) => {
-  e.preventDefault();
-  appCanvas.focus();
-  const button = appButtonOf(e);
-  if (!button) return;
-  const p = appNorm(e.clientX, e.clientY);
-  appSend({ t: 'app.mouse', a: 'down', b: button, x: p.x, y: p.y });
-  appButtonsDown.add(button);
-});
-
-window.addEventListener('mouseup', (e) => {
-  const button = appButtonOf(e);
-  if (!button || !appButtonsDown.has(button)) return;
-  const p = appNorm(e.clientX, e.clientY);
-  appSend({ t: 'app.mouse', a: 'up', b: button, x: p.x, y: p.y });
-  appButtonsDown.delete(button);
-});
-
-appCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
-appCanvas.addEventListener(
-  'wheel',
-  (e) => {
-    e.preventDefault();
-    const p = appNorm(e.clientX, e.clientY);
-    appSend({ t: 'app.wheel', x: p.x, y: p.y, dy: e.deltaY > 0 ? -1 : 1 });
-  },
-  { passive: false }
-);
-
-appCanvas.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') return;
-  e.preventDefault();
-  appSend({ t: 'app.key', a: 'down', code: e.code, key: e.key });
-});
-
-appCanvas.addEventListener('keyup', (e) => {
-  if (e.key === 'Escape') return;
-  e.preventDefault();
-  appSend({ t: 'app.key', a: 'up', code: e.code, key: e.key });
-});
-
-// 页面内全屏（放大画面，不调用浏览器全屏 API）
-document.getElementById('appViewFull').addEventListener('click', () => {
-  const modal = document.getElementById('modalAppView');
-  const full = modal.classList.toggle('app-view-full');
-  document.getElementById('appViewFull').textContent = full ? '还原' : '全屏';
-});
-
-// 前往控制桌面页
-document.getElementById('appViewDesktop').addEventListener('click', () => {
+document.getElementById('appViewCanvas').addEventListener('click', () => {
   closeModal();
   switchView('desktop');
 });
