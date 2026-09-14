@@ -328,10 +328,12 @@
     <div class="app-view-head">
       <h3 id="appViewTitle">应用</h3>
       <span id="appViewStatus" class="app-view-status">启动中…</span>
+      <button class="btn" id="appViewFull" type="button">全屏</button>
+      <button class="btn" id="appViewDesktop" type="button">前往控制桌面</button>
       <button class="btn" id="appViewClose" type="button">关闭</button>
     </div>
     <div class="app-view-stage">
-      <canvas id="appViewCanvas"></canvas>
+      <canvas id="appViewCanvas" tabindex="0"></canvas>
       <div id="appViewHint" class="app-view-hint">启动中…</div>
     </div>
   </div>

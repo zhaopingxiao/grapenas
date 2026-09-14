@@ -7,7 +7,6 @@ const koffi = require("koffi");
 
 const user32 = koffi.load("user32.dll");
 const shell32 = koffi.load("shell32.dll");
-
 // Make this process DPI-aware so cursor coordinates match the physical
 // pixels reported by the screen capture (important on Hi-DPI displays).
 const SetProcessDPIAware = user32.func("bool __stdcall SetProcessDPIAware()");
@@ -396,11 +395,67 @@ async function grabWindowJpeg(win, quality = 75, maxWidth = 1280) {
   return { data, width, height };
 }
 
+// ------------------------------------------------- 向指定窗口发输入（全局输入，先带到前台）
+
+const RECT = koffi.struct("RECT", { left: "int32", top: "int32", right: "int32", bottom: "int32" });
+const GetWindowRect = user32.func("bool __stdcall GetWindowRect(uintptr_t hwnd, _Out_ RECT *rect)");
+const ClientToScreen = user32.func("bool __stdcall ClientToScreen(uintptr_t hwnd, _Inout_ POINT *pt)");
+const IsWindow = user32.func("bool __stdcall IsWindow(uintptr_t hwnd)");
+const IsIconic = user32.func("bool __stdcall IsIconic(uintptr_t hwnd)");
+const ShowWindow = user32.func("bool __stdcall ShowWindow(uintptr_t hwnd, int cmd)");
+const SetForegroundWindow = user32.func("bool __stdcall SetForegroundWindow(uintptr_t hwnd)");
+
+const SW_RESTORE = 9;
+const VK_MENU = 0x12;
+
+// 窗口矩形（物理像素）
+function getWindowRect(hwnd) {
+  try {
+    const rect = {};
+    if (!GetWindowRect(hwnd, rect)) return null;
+    return rect;
+  } catch (err) {
+    return null;
+  }
+}
+
+// 窗口客户区左上角在屏幕上的位置（物理像素）
+function getClientOrigin(hwnd) {
+  try {
+    const pt = { x: 0, y: 0 };
+    if (!ClientToScreen(hwnd, pt)) return null;
+    return pt;
+  } catch (err) {
+    return null;
+  }
+}
+
+// 把窗口带到前台（键盘/鼠标输入需要焦点；SetForegroundWindow 受限时用 Alt 键解除）
+function focusWindow(hwnd, inputController) {
+  try {
+    if (!IsWindow(hwnd)) return false;
+    if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+    if (!SetForegroundWindow(hwnd) && inputController) {
+      inputController._key(VK_MENU, false);
+      inputController._key(VK_MENU, true);
+      SetForegroundWindow(hwnd);
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 class InputController {
   move(nx, ny, region) {
     const x = Math.round(region.left + Number(nx) * (region.width - 1));
     const y = Math.round(region.top + Number(ny) * (region.height - 1));
     SetCursorPos(x, y);
+  }
+
+  // 屏幕绝对坐标移动（应用窗口输入用）
+  moveTo(x, y) {
+    SetCursorPos(Math.round(x), Math.round(y));
   }
 
   // 读取系统光标位置与形状，位置换算为该区域内的归一化坐标；visible 表示是否在区域内
@@ -546,4 +601,7 @@ module.exports = {
   findNewWindows,
   launchShortcut,
   grabWindowJpeg,
+  getWindowRect,
+  getClientOrigin,
+  focusWindow,
 };
