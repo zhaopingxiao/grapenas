@@ -9,6 +9,25 @@ const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 
 export const PORT = 9643;
 
+// 葡萄云所有内置路径都挂在这个前缀下：/grapenas/ws、/grapenas/api/...、/grapenas/style.css
+// 只有壳页面本身留在 /（方便直接打开站点根）。应用与手动反向代理也会挂在 /grapenas/<路径> 下，
+// 因此应用 id 不能再叫 grapenas。
+export const BASE_PATH = '/grapenas';
+
+// 登录 cookie 的 Path 用站点根：壳页面在 "/"，若把 cookie 限定在 BASE_PATH，
+// 浏览器访问 "/" 时不会带上它，会出现"登录成功 -> 跳 / -> 又弹回登录页"的死循环。
+export const COOKIE_PATH = '/';
+
+// 给站内绝对路径加上前缀：withBase('/api') -> '/grapenas/api'
+// 保留的路径段：应用 id / 手动代理路径不能占用
+export const RESERVED_SEGMENT = 'grapenas';
+
+export function withBase(p) {
+  const s = String(p == null ? '' : p);
+  if (!s.startsWith('/')) return BASE_PATH + '/' + s;
+  return s === '/' ? BASE_PATH + '/' : BASE_PATH + s;
+}
+
 const config = {
   accessCodeHash: null,
   accessCodeSalt: null,

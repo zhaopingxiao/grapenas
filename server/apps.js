@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getApps, getApp, addApp, removeApp, getProxies, addProxy, removeProxy, PORT } from './config.js';
+import { getApps, getApp, addApp, removeApp, getProxies, addProxy, removeProxy, PORT, BASE_PATH, RESERVED_SEGMENT } from './config.js';
 import { log } from './logger.js';
 import { isReservedPath } from './proxy.js';
 import { packagesDir, isStorageConfigured } from './storage.js';
@@ -22,6 +22,44 @@ export function pidAlive(pid) {
   } catch (e) {
     return e.code === 'EPERM';
   }
+}
+
+// 取某进程的子进程列表（Windows 用 PowerShell 的 CIM 查询——新版 Windows 已移除 wmic；Unix 用 ps）
+function childPids(pid) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
+        ],
+        { encoding: 'utf8', windowsHide: true, timeout: 8000 }
+      );
+      return out
+        .split(/\r?\n/)
+        .map((l) => parseInt(l.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0);
+    }
+    const out = execFileSync('ps', ['-o', 'pid=', '--ppid', String(pid)], { encoding: 'utf8' });
+    return out
+      .split(/\s+/)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isInteger(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
+// 沿子进程树往下找最底层的进程：手动命令是用 cmd 外壳拉起的，
+// cmd 的 PID 不等于应用进程，这里换成真正的应用进程
+function deepestChildPid(pid, depth = 0) {
+  if (depth > 6) return pid;
+  const kids = childPids(pid).filter((k) => k !== pid);
+  if (!kids.length) return pid;
+  // 只跟踪第一个子进程（应用通常是一条链：cmd -> node）
+  return deepestChildPid(kids[0], depth + 1);
 }
 
 function loadProgress() {
@@ -58,7 +96,7 @@ export function markAppStopping(id) {
 }
 
 // 启动应用（已运行则跳过并返回现有状态）
-export function startApp(app) {
+export async function startApp(app) {
   const status = checkApp(app);
   if (status.running) return status;
 
@@ -72,7 +110,7 @@ export function startApp(app) {
   }
 
   // 隐藏命令行窗口：windowsHide + stdio 重定向到日志文件。
-  // 包应用（js-only 约定）：直接 spawn node start.js——detached 全平台，
+  // 包应用：直接 spawn node main.js——detached 全平台，
   // 应用真正脱离 NAS 生命周期（NAS 死亡应用存活，重启后按记录收养），
   // fd 写日志（无管道，不存在 EPIPE/句柄失效问题）
   fs.mkdirSync(APP_LOG_DIR, { recursive: true });
@@ -87,11 +125,39 @@ export function startApp(app) {
   }
   if (app.package && script) {
     const fd = fs.openSync(logPath, 'a');
+    // 应用运行时信息：密钥与回调地址（应用可读包内 .grapenas.json，也可用同名环境变量）
+    const runtimeFile = runtimeInfoFile(app);
+    if (runtimeFile && app.secret) {
+      try {
+        fs.writeFileSync(
+          runtimeFile,
+          JSON.stringify(
+            {
+              id: app.id,
+              secret: app.secret,
+              base_url: `http://127.0.0.1:${PORT}${BASE_PATH}`,
+              reload_sidebar: `/api/reload_sidebar/${app.id}`,
+            },
+            null,
+            2
+          )
+        );
+      } catch (err) {
+        log('warn', `应用 ${app.id} 写入 .grapenas.json 失败: ${err.message}`);
+      }
+    }
     child = spawn(process.execPath, [script], {
       detached: true,
       stdio: ['ignore', fd, fd],
       windowsHide: true,
       cwd: app.dir || ROOT,
+      env: {
+        ...process.env,
+        GRAPENAS_APP_ID: app.id,
+        GRAPENAS_APP_SECRET: app.secret || '',
+        GRAPENAS_BASE_URL: `http://127.0.0.1:${PORT}${BASE_PATH}`,
+        GRAPENAS_DATA_DIR: app.dir || ROOT,
+      },
     });
     fs.closeSync(fd);
   } else {
@@ -109,10 +175,30 @@ export function startApp(app) {
   }
   child.unref();
   child.on('error', (err) => log('error', `应用 ${app.id} 启动失败: ${err.message}`));
+
+  // 记录「应用自身」的 PID：Windows 下手动命令是经 cmd 外壳拉起的，
+  // child.pid 是 cmd.exe 而不是真正的应用进程，因此这里再校正一次：
+  //   1) 有端口时，端口占用者就是应用进程本身（最准）
+  //   2) 否则沿子进程树找到最底层那个（去掉 shell 包装层）
+  const spawnPid = child.pid;
+  let realPid = spawnPid;
+  if (app.ports.length) {
+    for (let i = 0; i < 12 && app.ports.length; i++) {
+      const owner = app.ports.map((p) => findPidByPort(p)).find((p) => p != null);
+      if (owner != null) {
+        realPid = owner;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250)); // 等应用把端口监听起来
+    }
+  } else if (process.platform === 'win32') {
+    realPid = deepestChildPid(spawnPid);
+  }
+
   child.on('exit', (code, signal) => {
-    // 无论何种原因退出都清除记录，保持停止状态（不自动重启）
+    // 只有当前记录的进程就是本次拉起的进程时才清记录（避免与重启后的新进程互相覆盖）
     const progress = loadProgress();
-    if (progress[app.id] === child.pid) {
+    if (progress[app.id] === spawnPid || progress[app.id] === realPid) {
       delete progress[app.id];
       saveProgress(progress);
     }
@@ -125,9 +211,9 @@ export function startApp(app) {
   });
 
   const progress = loadProgress();
-  progress[app.id] = child.pid;
+  progress[app.id] = realPid;
   saveProgress(progress);
-  log('info', `应用 ${app.name} (${app.id}) 已启动，PID ${child.pid}`);
+  log('info', `应用 ${app.name} (${app.id}) 已启动，PID ${realPid}`);
   return { running: true, pid: child.pid };
 }
 
@@ -211,14 +297,14 @@ export async function stopApp(id) {
 }
 
 // 服务启动时：按核对逻辑启动所有应用（已存活的跳过，不重复启动）
-export function ensureAppsRunning() {
+export async function ensureAppsRunning() {
   if (!isStorageConfigured()) {
     log('warn', '尚未配置存储位置，跳过应用启动');
     return;
   }
   for (const app of getApps()) {
     try {
-      startApp(app);
+      await startApp(app);
     } catch (err) {
       log('error', `应用 ${app.id} 启动异常: ${err.message}`);
     }
@@ -286,16 +372,18 @@ async function tarExtract(tarPath, destDir, entries = []) {
   await run('tar', ['-xf', tarPath, '-C', destDir, ...entries]);
 }
 
-// 启动/停止程序统一为 start.js / stop.js（全平台，由 node 执行）；
-// 需要特殊脚本操作时在 js 内自行调用（child_process 跑 bat/ps1/sh 等）
-function findProgram(dir, base) {
-  const f = base + '.js';
-  return fs.existsSync(path.join(dir, f)) ? { file: f, node: true } : null;
+// 应用包唯一入口：main.js（由 node 执行）。
+// 不再区分 start/stop：进程 PID 记在 .ground_progress 里用于校验，
+// main.js 一退出就等于应用停止（需要收尾就在 main.js 里监听 SIGINT/SIGTERM）
+export const APP_ENTRY = 'main.js';
+
+function findEntry(dir) {
+  return fs.existsSync(path.join(dir, APP_ENTRY)) ? { file: APP_ENTRY, node: true } : null;
 }
 
-// 把查到的程序拼成可执行命令（统一用当前 node 跑 .js）
-function programCommand(dir, prog) {
-  return `"${process.execPath}" "${path.join(dir, prog.file)}"`;
+// 拼成可执行命令（统一用当前 node 跑 main.js）
+function programCommand(dir) {
+  return `"${process.execPath}" "${path.join(dir, APP_ENTRY)}"`;
 }
 
 // 读取包内 config.json（容忍 UTF-8 BOM）
@@ -308,6 +396,9 @@ function validatePackageMeta(meta) {
   const id = String(meta.id || '').trim();
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
     throw new Error('包 config.json 的 id 无效（字母数字及 - _，≤32 字符）');
+  }
+  if (id.toLowerCase() === RESERVED_SEGMENT) {
+    throw new Error('应用 id 不可为 grapenas（与站内路径前缀冲突）');
   }
   if (getApp(id)) throw new Error(`应用 ${id} 已存在`);
   const name = String(meta.name || '').trim() || id;
@@ -328,7 +419,27 @@ function validatePackageMeta(meta) {
       throw new Error(`应用 id「${id}」与系统保留路径冲突（/api、/auth、/ws 等不可作为应用 id）`);
     }
   }
-  return { id, name, description, icon, port };
+
+  // 可选：侧边栏入口（iconsvg / sidebar_name / page，均为包内相对路径）
+  let sidebar = null;
+  if (meta.sidebar && typeof meta.sidebar === 'object') {
+    const rel = (v, label) => {
+      const p = String(v || '').replace(/\\/g, '/').trim();
+      if (!p) throw new Error(`sidebar 缺少 ${label}`);
+      if (p.startsWith('/') || p.includes('..') || /^[A-Za-z]:/.test(p)) {
+        throw new Error(`sidebar.${label} 路径非法`);
+      }
+      return p;
+    };
+    const sidebarName = String(meta.sidebar.sidebar_name || '').trim();
+    if (!sidebarName) throw new Error('sidebar 缺少 sidebar_name');
+    sidebar = {
+      iconsvg: rel(meta.sidebar.iconsvg, 'iconsvg'),
+      sidebar_name: sidebarName,
+      page: rel(meta.sidebar.page, 'page'),
+    };
+  }
+  return { id, name, description, icon, port, sidebar };
 }
 
 // 暂存上传的 tar：解出 config.json 与图标用于预览，tar 本体保留供安装
@@ -416,11 +527,25 @@ export async function installStagedTar(token) {
     await fs.promises.writeFile(pkgTypeFile, JSON.stringify({ type: 'commonjs' }));
   }
 
-  // 校验启动程序存在
-  const start = findProgram(pkgDir, 'start');
-  if (!start) {
+  // 校验入口存在
+  const entry = findEntry(pkgDir);
+  if (!entry) {
     await fs.promises.rm(pkgDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error('包内缺少启动程序（start.js）');
+    throw new Error(`包内缺少入口程序（${APP_ENTRY}）`);
+  }
+
+  // 侧边栏：声明的图标与页面片段必须真实存在于包内
+  if (info.sidebar) {
+    for (const [field, rel] of [
+      ['iconsvg', info.sidebar.iconsvg],
+      ['page', info.sidebar.page],
+    ]) {
+      const target = path.join(pkgDir, rel);
+      if (!target.startsWith(pkgDir + path.sep) || !fs.existsSync(target)) {
+        await fs.promises.rm(pkgDir, { recursive: true, force: true }).catch(() => {});
+        throw new Error(`sidebar.${field} 指向的文件不存在: ${rel}`);
+      }
+    }
   }
 
   const app = {
@@ -428,33 +553,89 @@ export async function installStagedTar(token) {
     name: info.name,
     description: info.description,
     icon: info.icon,
-    script: path.join(pkgDir, start.file),
-    command: programCommand(pkgDir, start),
+    script: path.join(pkgDir, entry.file),
+    command: programCommand(pkgDir),
     ports: info.port ? [info.port] : [],
     dir: pkgDir,
     package: true,
+    // 每应用密钥：应用调 /api/reload_sidebar 等接口时用它证明身份
+    secret: crypto.randomBytes(16).toString('hex'),
   };
+  if (info.sidebar) app.sidebar = info.sidebar;
+
+  // 侧边栏入口：sidebar.json（多入口）为主，config.json 的 sidebar（单入口）兼容保留
+  const sidebarEntries = readAppSidebar(app);
+  if (sidebarEntries) {
+    for (const [i, entry] of sidebarEntries.entries()) {
+      for (const rel of [entry.iconsvg, entry.page]) {
+        const target = path.join(pkgDir, rel);
+        if (!target.startsWith(pkgDir + path.sep) || !fs.existsSync(target)) {
+          await fs.promises.rm(pkgDir, { recursive: true, force: true }).catch(() => {});
+          throw new Error(`sidebar.json 第 ${i + 1} 项的 ${rel} 不存在`);
+        }
+      }
+    }
+    log('info', `应用 ${info.id} 声明了 ${sidebarEntries.length} 个侧边栏入口`);
+  }
   addApp(app);
   syncAppProxyRules(app);
-  startApp(app); // 安装完成即启动
+  await startApp(app); // 安装完成即启动
   log('info', `应用 ${info.name} (${info.id}) 安装完成`);
   return app;
 }
 
-// 卸载应用：先运行停止程序，再停进程、清代理、删包目录、删配置
+// 卸载应用：停掉 main.js（连同子进程）→ 清代理 → 删包目录 → 删配置
+// 不再有 stop.js：需要收尾就在 main.js 里监听 SIGTERM
+// 读取应用包里的 sidebar.json（侧边栏入口声明，可选）。
+// 格式：[{ "iconsvg": "icon.svg", "sidebar_name": "名字", "page": "web/x.html" }, ...]
+// 返回 null 表示包里没有这个文件；返回 [] 表示有文件但没有任何有效入口。
+export function readAppSidebar(app) {
+  if (!app || !app.dir) return null;
+  const file = path.join(app.dir, 'sidebar.json');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    return null;
+  }
+  let list;
+  try {
+    list = JSON.parse(raw);
+  } catch (err) {
+    log('warn', `应用 ${app.id} 的 sidebar.json 不是合法 JSON: ${err.message}`);
+    return [];
+  }
+  if (!Array.isArray(list)) {
+    log('warn', `应用 ${app.id} 的 sidebar.json 必须是数组`);
+    return [];
+  }
+  const out = [];
+  list.forEach((item, i) => {
+    if (!item || typeof item !== 'object') return;
+    const name = String(item.sidebar_name || '').trim();
+    const page = String(item.page || '').replace(/\\/g, '/').trim();
+    const icon = String(item.iconsvg || '').replace(/\\/g, '/').trim();
+    if (!name || !page || !icon) {
+      log('warn', `应用 ${app.id} 的 sidebar.json 第 ${i + 1} 项缺少 sidebar_name/page/iconsvg，已跳过`);
+      return;
+    }
+    const bad = (p) => p.startsWith('/') || p.includes('..') || /^[A-Za-z]:/.test(p);
+    if (bad(page) || bad(icon)) {
+      log('warn', `应用 ${app.id} 的 sidebar.json 第 ${i + 1} 项路径非法，已跳过`);
+      return;
+    }
+    out.push({ iconsvg: icon, sidebar_name: name, page });
+  });
+  return out;
+}
+
+// 应用自身进程可读的运行时信息（密钥等）
+export function runtimeInfoFile(app) {
+  return app && app.dir ? path.join(app.dir, '.grapenas.json') : null;
+}
+
 export async function uninstallApp(app) {
   stoppingApps.add(app.id); // 卸载全程视为主动停止
-  if (app.package && app.dir) {
-    const stop = findProgram(app.dir, 'stop');
-    if (stop) {
-      try {
-        await runProgram(programCommand(app.dir, stop), app.dir);
-        log('info', `应用 ${app.id} 停止程序已执行`);
-      } catch (err) {
-        log('warn', `应用 ${app.id} 停止程序执行失败: ${err.message}`);
-      }
-    }
-  }
   await stopApp(app.id);
   removeAppProxyRules(app.id);
   if (app.package && app.dir) {

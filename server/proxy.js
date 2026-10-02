@@ -58,7 +58,7 @@ export function findRefererRule(req) {
 }
 
 // 逐跳头部不应转发
-const HOP_BY_HOP = new Set([
+export const HOP_BY_HOP = new Set([
   'connection',
   'keep-alive',
   'transfer-encoding',
@@ -70,7 +70,7 @@ const HOP_BY_HOP = new Set([
 ]);
 
 // 重写 HTML 中的绝对路径属性：href/src/action="/x" -> "/<子路径>/x"
-function rewriteHtml(body, prefix) {
+export function rewriteHtml(body, prefix) {
   const bare = prefix.slice(1); // '/opencode' -> 'opencode'
   return body.replace(
     /(\s(?:href|src|action)\s*=\s*["'])\/(?!\/)([^"']*)/g,
@@ -86,7 +86,7 @@ function rewriteHtml(body, prefix) {
 //   地址栏始终留在 /<子路径>/* 下（后退不掉出应用，刷新能命中代理规则）。
 // - 包装 WebSocket 构造器：应用连接同源根路径 WS（如 ws://host/websocket）时
 //   自动改连 /<子路径>/websocket，与 WS 代理映射对应。
-function shimScript(prefix) {
+export function shimScript(prefix) {
   return (
     `<script data-grapenas-shim>(function(){var p=${JSON.stringify(prefix)};` +
     `function fix(u){if(typeof u!=='string')return u;if(u.indexOf(location.origin)===0)u=u.slice(location.origin.length);` +

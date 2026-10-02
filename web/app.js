@@ -2,6 +2,9 @@
  * 所有内置页面都在 "/" 下，通过 JS 切换视图，不依赖任何服务端路由。
  * 与服务器的数据交互全部通过 WebSocket 完成（认证基于 cookie 中的临时令牌）。 */
 
+// 站内路径前缀：除壳页面 "/" 外，静态资源与接口都在 /grapenas 下（见 server/config.js BASE_PATH）
+const BASE = '/grapenas';
+
 const state = { view: 'dashboard', ws: null, connected: false };
 let reqId = 0;
 const pending = new Map();
@@ -14,7 +17,7 @@ const HEARTBEAT_SILENCE = 50000; // 超过该时长无任何消息往来则判�
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const ws = new WebSocket(`${proto}://${location.host}${BASE}/ws`);
   state.ws = ws;
   let lastMsgAt = Date.now();
 
@@ -42,7 +45,7 @@ function connect() {
     refreshCurrentView();
     checkStorageConfig();
     syncTheme();
-    checkDesktopSupport();
+    loadSidebarApps();
   };
 
   ws.onmessage = (e) => {
@@ -69,7 +72,7 @@ function connect() {
     updateConnStatus();
     if (e.code === 4401) {
       // 令牌失效，回到访问码页面
-      location.replace('/auth?redirect=' + encodeURIComponent('/'));
+      location.replace(BASE + '/auth?redirect=' + encodeURIComponent('/'));
       return;
     }
     setTimeout(connect, 2000); // 自动重连
@@ -96,21 +99,95 @@ function handleEvent(msg) {
   }
   if (msg.event === 'shortcuts') {
     if (state.view === 'apps') loadApps();
-    const frame = document.querySelector('.desktop-frame');
-    if (frame && frame.contentWindow && typeof frame.contentWindow.desktopRefreshShortcuts === 'function') {
-      frame.contentWindow.desktopRefreshShortcuts();
-    }
+  }
+  // 应用在运行时刷新了自己的侧边栏入口（/grapenas/api/reload_sidebar/<id>）
+  if (msg.event === 'sidebar') {
+    loadSidebarApps();
   }
 }
 
-// 控制桌面入口仅 Windows 显示
-async function checkDesktopSupport() {
-  try {
-    const st = await call('desktop.status');
-    document.getElementById('navDesktop').classList.toggle('hidden', !st.supported);
-  } catch {
-    /* 忽略 */
+// ---------- 侧边栏（内置入口 + 应用入口） ----------
+// 侧边栏应用入口：包内 sidebar.json（多入口）或 config.json 的 sidebar（单入口）
+
+const BUILTIN_NAV = [
+  { view: 'dashboard', label: '仪表盘', icon: '/grapenas/icons/dashboard.svg' },
+  { view: 'files', label: '文件管理', icon: '/grapenas/icons/files.svg' },
+  { view: 'apps', label: '应用', icon: '/grapenas/icons/apps.svg' },
+  { view: 'settings', label: '选项', icon: '/grapenas/icons/settings.svg' },
+];
+
+const APP_VIEW = 'appview'; // 应用侧边栏页面片段共用的视图容器
+const appRuntimes = new Map();
+let appsList = [];
+let activeAppId = null;
+let activeAppEntry = 0; // 当前打开的是该应用的第几个侧边栏入口（sidebar.json 的小标）
+
+// 暴露给应用片段（片段注入模式下与壳页面共用同一个 document）
+window.GrapenasHost = {
+  call,
+  toast,
+  switchView,
+  reloadView() {
+    if (activeAppId) switchView(APP_VIEW, { app: activeAppId, force: true });
+  },
+};
+
+function renderSidebar() {
+  const nav = document.getElementById('navList');
+  if (!nav) return;
+  nav.innerHTML = '';
+  const addItem = (view, label, iconUrl, appId, entry) => {
+    const btn = document.createElement('button');
+    btn.className = 'nav-item';
+    btn.dataset.view = view;
+    if (appId) btn.dataset.app = appId;
+    if (entry != null) btn.dataset.entry = String(entry);
+    if (state.view === view && (!appId || (appId === activeAppId && Number(entry || 0) === activeAppEntry))) {
+      btn.classList.add('active');
+    }
+    const icon = document.createElement('img');
+    icon.className = 'nav-icon-img';
+    icon.alt = '';
+    icon.src = iconUrl;
+    btn.appendChild(icon);
+    btn.appendChild(document.createTextNode(label));
+    nav.appendChild(btn);
+  };
+  // 应用入口排在「选项」之前：一个应用可声明多个入口（包内 sidebar.json）
+  // 应用没在运行（或服务端已隐藏）时不下发 sidebar，这里自然就不显示
+  for (const item of BUILTIN_NAV) {
+    if (item.view === 'settings') {
+      for (const app of appsList) {
+        const entries = app.sidebar || [];
+        for (const entry of entries) {
+          addItem(APP_VIEW, entry.sidebar_name, entry.iconsvg || '/grapenas/grape.svg', app.id, entry.index);
+        }
+      }
+    }
+    addItem(item.view, item.label, item.icon);
   }
+  applyNavActive();
+}
+
+function applyNavActive() {
+  const activeNav = NAV_OF[state.view] || state.view;
+  document.querySelectorAll('.nav-item').forEach((b) => {
+    const isActive =
+      state.view === APP_VIEW
+        ? b.dataset.app === activeAppId && Number(b.dataset.entry || 0) === activeAppEntry
+        : b.dataset.view === activeNav;
+    b.classList.toggle('active', isActive);
+  });
+}
+
+// 侧边栏入口来自应用列表（应用包 config.json 的 sidebar 字段）
+async function loadSidebarApps() {
+  try {
+    appsList = (await call('apps.list')) || [];
+  } catch {
+    appsList = [];
+  }
+  renderSidebar();
 }
 
 function updateConnStatus() {
@@ -125,7 +202,7 @@ const VIEW_LOADERS = {
   dashboard: loadDashboard,
   files: loadFilesView,
   apps: loadApps,
-  desktop: loadDesktopView,
+  [APP_VIEW]: loadAppView,
   accesscode: loadAccessCode,
   proxy: loadProxyView,
   security: loadSecurityView,
@@ -140,7 +217,6 @@ const NAV_OF = {
   dashboard: 'dashboard',
   files: 'files',
   apps: 'apps',
-  desktop: 'desktop',
   settings: 'settings',
   personalization: 'settings',
   themecolor: 'settings',
@@ -151,17 +227,19 @@ const NAV_OF = {
   storagelocation: 'settings',
 };
 
-function switchView(view) {
-  // 离开控制桌面：销毁 iframe，断开桌面连接（不继续占用控制者名额）
-  if (state.view === 'desktop' && view !== 'desktop') {
-    const desktopBody = document.getElementById('desktopBody');
-    if (desktopBody) desktopBody.innerHTML = '';
-  }
+function switchView(view, options = {}) {
+  // 离开应用视图：卸载片段（断开连接、清定时器与全局事件）
+  if (state.view === APP_VIEW && view !== APP_VIEW) unmountAppView();
   state.view = view;
-  const activeNav = NAV_OF[view] || view;
-  document.querySelectorAll('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === activeNav));
+  if (view === APP_VIEW && options.app) {
+    activeAppId = options.app;
+    activeAppEntry = Number(options.entry || 0);
+  }
+  if (options.force) appRuntimes.delete(activeAppId);
   document.querySelectorAll('.view').forEach((v) => v.classList.add('hidden'));
-  document.getElementById('view-' + view).classList.remove('hidden');
+  const section = document.getElementById('view-' + view);
+  if (section) section.classList.remove('hidden');
+  applyNavActive();
   document.body.classList.remove('nav-open'); // 手机端选择页面后收起抽屉
   if (state.connected) refreshCurrentView();
 }
@@ -528,32 +606,114 @@ async function syncTheme() {
   }
 }
 
-// ---------- 控制桌面 ----------
+// ---------- // 应用侧边栏视图（应用包里的页面片段注入这里） ----------
 
-async function loadDesktopView() {
-  const body = document.getElementById('desktopBody');
-  body.innerHTML = '<p class="muted">正在启动桌面控制服务…</p>';
+// 片段内的相对资源统一走 sidebar-asset 接口（服务端已改写 HTML 里的相对路径，这里兜住 JS 动态引用）
+// 片段内的相对资源统一走 sidebar-asset 接口（要带 entry 才能定位到具体入口的 page）
+function rewriteFragmentUrl(value, appId, entryIndex) {
+  if (!value) return value;
+  const v = String(value).trim();
+  if (/^(?:[a-z]+:|\/\/|#|data:|blob:)/i.test(v)) return v;
+  if (v.startsWith(BASE + '/api/apps/sidebar-asset')) return v;
+  const file = v.startsWith('/') ? v.slice(1) : v;
+  return (
+    BASE +
+    '/api/apps/sidebar-asset?id=' +
+    encodeURIComponent(appId) +
+    '&entry=' +
+    encodeURIComponent(entryIndex || 0) +
+    '&file=' +
+    encodeURIComponent(file)
+  );
+}
+
+// 片段脚本串行执行，保证依赖顺序
+function loadFragmentScript(url) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = false;
+    s.dataset.appScript = '1';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('片段脚本加载失败: ' + url));
+    document.head.appendChild(s);
+  });
+}
+
+async function loadAppView() {
+  const host = document.getElementById('appViewHost');
+  if (!activeAppId) return;
+  const app = appsList.find((a) => a.id === activeAppId);
+  const appId = activeAppId;
+  const entries = (app && app.sidebar) || [];
+  const entry = entries.find((e) => Number(e.index) === activeAppEntry) || entries[0];
+  renderCrumbs(document.getElementById('appViewCrumbs'), [
+    { label: (entry && entry.sidebar_name) || (app && app.name) || appId, current: true },
+  ]);
+  host.innerHTML = '<p class="muted">正在加载应用页面…</p>';
   try {
-    let st = await call('desktop.status');
-    if (!st.supported) {
-      body.innerHTML = '<p class="muted">仅 Windows 系统支持控制桌面。</p>';
-      return;
-    }
-    if (!st.toolOk) {
-      body.innerHTML = `<p class="muted">未找到桌面控制工具（${escapeHtml(st.toolPath)}）</p>`;
-      return;
-    }
-    if (!st.running) {
-      st = await call('desktop.start');
-    }
-    body.innerHTML = '';
-    const frame = document.createElement('iframe');
-    frame.className = 'desktop-frame';
-    frame.src = '/desktop/?token=' + encodeURIComponent(st.token || '');
-    body.appendChild(frame);
+    if (!app) throw new Error('应用不存在: ' + appId);
+    if (!entry) throw new Error('应用 ' + appId + ' 没有可用的侧边栏入口');
+    const res = await fetch(
+      BASE + '/api/apps/sidebar?id=' + encodeURIComponent(appId) + '&entry=' + encodeURIComponent(entry.index),
+      { credentials: 'same-origin' }
+    );
+    if (!res.ok) throw new Error('应用页面加载失败（HTTP ' + res.status + '）');
+    await mountAppFragment(host, await res.text(), appId, entry.index);
+    appRuntimes.set(appId, { api: window.GrapenasModule });
   } catch (err) {
-    body.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+    host.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = err.message;
+    host.appendChild(p);
   }
+}
+
+async function mountAppFragment(host, html, appId, entryIndex = 0) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  const frag = tpl.content;
+  frag.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
+    if (node.tagName === 'LINK') {
+      node.setAttribute('href', rewriteFragmentUrl(node.getAttribute('href'), appId, entryIndex));
+    }
+    node.dataset.appStyle = appId;
+    document.head.appendChild(node);
+  });
+  const scripts = [...frag.querySelectorAll('script')];
+  scripts.forEach((s) => s.remove());
+  host.innerHTML = '';
+  host.appendChild(frag);
+  const rootEl = host.firstElementChild;
+  for (const old of scripts) {
+    if (old.src) {
+      await loadFragmentScript(rewriteFragmentUrl(old.getAttribute('src'), appId, entryIndex));
+    } else {
+      const s = document.createElement('script');
+      s.textContent = old.textContent;
+      s.dataset.appScript = '1';
+      document.head.appendChild(s);
+    }
+  }
+  // 应用片段可注册 window.GrapenasModule = { mount(root), unmount() }（可选）
+  const api = window.GrapenasModule;
+  if (api && typeof api.mount === 'function') api.mount(rootEl);
+}
+
+function unmountAppView() {
+  const api = window.GrapenasModule;
+  try {
+    if (api && typeof api.unmount === 'function') api.unmount();
+  } catch {
+    /* 片段卸载异常不应影响切换 */
+  }
+  appRuntimes.delete(activeAppId);
+  document.querySelectorAll('script[data-app-script]').forEach((s) => s.remove());
+  document.querySelectorAll('[data-app-style]').forEach((n) => n.remove());
+  const host = document.getElementById('appViewHost');
+  if (host) host.innerHTML = '';
+  window.GrapenasModule = undefined;
 }
 
 async function submitStoragePath(inputId, errorId) {
@@ -656,7 +816,7 @@ function renderFilesBrowser(content, entries) {
     for (const f of fileInput.files) {
       try {
         const res = await fetch(
-          '/api/files/upload?path=' + encodeURIComponent(filesPath || '') + '&name=' + encodeURIComponent(f.name),
+          BASE + '/api/files/upload?path=' + encodeURIComponent(filesPath || '') + '&name=' + encodeURIComponent(f.name),
           { method: 'POST', body: f }
         );
         const d = await res.json();
@@ -732,7 +892,7 @@ function renderFilesBrowser(content, entries) {
       dl.textContent = '下载';
       dl.target = '_blank';
       dl.rel = 'noopener';
-      dl.href = '/api/files/download?path=' + encodeURIComponent(filesRel(e.name));
+      dl.href = BASE + '/api/files/download?path=' + encodeURIComponent(filesRel(e.name));
       actions.appendChild(dl);
     }
     const del = document.createElement('button');
@@ -875,6 +1035,7 @@ let lastShortcuts = [];
 const installing = new Map(); // id -> meta（本地"安装中"状态）
 
 async function loadApps() {
+  loadSidebarApps();
   try {
     const [apps, shortcuts] = await Promise.all([call('apps.list'), call('shortcuts.list')]);
     renderApps(apps, shortcuts);
@@ -928,7 +1089,7 @@ const SHORTCUT_BADGE =
 function buildShortcutTile(sc) {
   const tile = document.createElement('div');
   tile.className = 'app-tile shortcut';
-  tile.title = `桌面快捷方式：${sc.lnk || ''}\n点击打开并进入控制桌面`;
+  tile.title = `桌面快捷方式：${sc.lnk || ''}\n点击启动`;
 
   const icon = document.createElement('div');
   icon.className = 'tile-icon';
@@ -965,139 +1126,21 @@ function buildShortcutTile(sc) {
   name.textContent = sc.name;
   tile.appendChild(name);
 
-  tile.addEventListener('click', () => {
-    openAppViewer(sc);
+  tile.addEventListener('click', async () => {
+    try {
+      await call('shortcuts.launch', { id: sc.id });
+      toast('已启动「' + sc.name + '」');
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
   return tile;
 }
 
-// ---------- 应用窗口查看（快捷方式启动后实时采集该程序窗口） ----------
-
-let appViewer = { ws: null, frameChain: Promise.resolve() };
-
-async function openAppViewer(sc) {
-  closeAppViewer();
-  const title = document.getElementById('appViewTitle');
-  const status = document.getElementById('appViewStatus');
-  const canvas = document.getElementById('appViewCanvas');
-  const hint = document.getElementById('appViewHint');
-  title.textContent = sc.name;
-  status.textContent = '启动中…';
-  status.className = 'app-view-status';
-  hint.textContent = '启动中…';
-  hint.style.display = '';
-  canvas.style.display = 'none';
-  openModal('modalAppView');
-
-  let st;
-  try {
-    st = await call('desktop.status');
-    if (!st.supported) throw new Error('仅 Windows 支持查看应用窗口');
-    if (!st.running) st = await call('desktop.start');
-  } catch (err) {
-    status.textContent = err.message;
-    status.className = 'app-view-status error';
-    hint.textContent = err.message;
-    return;
-  }
-
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(
-    `${proto}://${location.host}/desktop/ws?token=${encodeURIComponent(st.token || '')}&mode=app`
-  );
-  appViewer.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ t: 'app.open', lnk: sc.lnk, name: sc.name }));
-  ws.onmessage = (event) => {
-    if (appViewer.ws !== ws) return;
-    if (typeof event.data === 'string') {
-      try {
-        handleAppViewMessage(JSON.parse(event.data));
-      } catch {
-        /* 忽略 */
-      }
-      return;
-    }
-    drawAppFrame(ws, event.data);
-  };
-  ws.onclose = () => {
-    if (appViewer.ws !== ws) return;
-    status.textContent = '连接已断开';
-    status.className = 'app-view-status error';
-  };
-}
-
-function handleAppViewMessage(msg) {
-  const status = document.getElementById('appViewStatus');
-  const hint = document.getElementById('appViewHint');
-  const canvas = document.getElementById('appViewCanvas');
-  if (msg.t === 'app.state') {
-    if (msg.state === 'starting') {
-      status.textContent = '启动中…';
-      status.className = 'app-view-status';
-      hint.textContent = '启动中…';
-      hint.style.display = '';
-    } else if (msg.state === 'running') {
-      status.textContent = '正在运行';
-      status.className = 'app-view-status running';
-    } else if (msg.state === 'stopped') {
-      status.textContent = '应用已关闭';
-      status.className = 'app-view-status error';
-      hint.textContent = msg.message || '应用已关闭';
-      hint.style.display = '';
-      canvas.style.display = 'none';
-    }
-  } else if (msg.t === 'app.size') {
-    canvas.width = msg.width;
-    canvas.height = msg.height;
-    canvas.style.display = 'block';
-    hint.style.display = 'none';
-  } else if (msg.t === 'error') {
-    status.textContent = msg.message || '出错了';
-    status.className = 'app-view-status error';
-  }
-}
-
-function drawAppFrame(ws, blob) {
-  appViewer.frameChain = appViewer.frameChain
-    .then(async () => {
-      const canvas = document.getElementById('appViewCanvas');
-      const bitmap = await createImageBitmap(blob);
-      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-      }
-      canvas.getContext('2d').drawImage(bitmap, 0, 0);
-      bitmap.close();
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ack' }));
-    })
-    .catch(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ack' }));
-    });
-}
-
-function closeAppViewer() {
-  if (appViewer.ws) {
-    const ws = appViewer.ws;
-    appViewer.ws = null;
-    try {
-      ws.close();
-    } catch (err) {
-      /* 忽略 */
-    }
-  }
-}
-
-// ---- 查看器：点击画面进入控制桌面页 ----
-
-document.getElementById('appViewCanvas').addEventListener('click', () => {
-  closeModal();
-  switchView('desktop');
-});
-
 function buildIconContent(app) {
   if (app.icon) {
     const img = document.createElement('img');
-    img.src = '/api/apps/icon?id=' + encodeURIComponent(app.id);
+    img.src = BASE + '/api/apps/icon?id=' + encodeURIComponent(app.id);
     img.alt = app.name;
     img.draggable = false;
     return img;
@@ -1354,15 +1397,18 @@ function openModal(id) {
 }
 
 function closeModal() {
-  if (!document.getElementById('modalAppView').classList.contains('hidden')) closeAppViewer();
   document.getElementById('modalOverlay').classList.add('hidden');
 }
 
 // ---------- 事件绑定 ----------
 
-document.querySelectorAll('.nav-item').forEach((b) =>
-  b.addEventListener('click', () => switchView(b.dataset.view))
-);
+// 侧边栏入口（内置 + 应用）动态渲染，用事件委托
+document.getElementById('navList').addEventListener('click', (e) => {
+  const btn = e.target.closest('.nav-item');
+  if (!btn) return;
+  if (btn.dataset.app) switchView(APP_VIEW, { app: btn.dataset.app, entry: Number(btn.dataset.entry || 0) });
+  else switchView(btn.dataset.view);
+});
 
 // 列表页条目（功能>反向代理、选项>安全设置、安全设置>访问码）与面包屑跳转
 document.querySelectorAll('.menu-item[data-goto]').forEach((li) =>
@@ -1484,7 +1530,7 @@ async function uploadPkg(file) {
   if (!file.name.toLowerCase().endsWith('.tar')) return toast('请选择 .tar 应用包', true);
   if (file.size > 50 * 1024 * 1024) return toast('应用包超过 50MB 上限', true);
   try {
-    const res = await fetch('/api/apps/upload', { method: 'POST', body: file });
+    const res = await fetch(BASE + '/api/apps/upload', { method: 'POST', body: file });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '上传失败');
     stagedPkg = { token: data.token, meta: data.meta };
@@ -1526,7 +1572,7 @@ document.getElementById('pkgInstallBtn').addEventListener('click', async () => {
   installing.set(meta.id, meta);
   renderApps(); // 立即显示"安装中"磁贴
   try {
-    const res = await fetch('/api/apps/install', {
+    const res = await fetch(BASE + '/api/apps/install', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -1624,7 +1670,7 @@ document.getElementById('revokeCancelBtn').addEventListener('click', closeModal)
 document.getElementById('revokeOkBtn').addEventListener('click', async () => {
   closeModal();
   try {
-    await fetch('/api/auth/revoke', { method: 'POST' });
+    await fetch(BASE + '/api/auth/revoke', { method: 'POST' });
     location.replace('/auth');
   } catch (err) {
     toast('撤销失败：' + err.message, true);

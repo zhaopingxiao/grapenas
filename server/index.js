@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, isAccessCodeSet, getApp, PORT } from './config.js';
+import { loadConfig, isAccessCodeSet, getApp, PORT, BASE_PATH, COOKIE_PATH, withBase, RESERVED_SEGMENT } from './config.js';
 import {
   verifyAccessCode,
   setupAccessCode,
@@ -12,16 +12,20 @@ import {
   revokeAllTokens,
   isValidCodeFormat,
 } from './auth.js';
-import { setupWebSocket, COOKIE_NAME } from './ws.js';
+import { setupWebSocket, COOKIE_NAME, broadcastEvent, sidebarEntriesFor } from './ws.js';
 import { log } from './logger.js';
 import { parseCookies, readBody, readRawBody, sendJson, redirect, getBearerToken } from './util.js';
-import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule } from './proxy.js';
-import { ensureAppsRunning, stageTar, installStagedTar } from './apps.js';
+import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule, isReservedPath } from './proxy.js';
+import { ensureAppsRunning, stageTar, installStagedTar, readAppSidebar } from './apps.js';
 import { resolveStoragePath } from './storage.js';
-import { desktopSupported, desktopStatus, desktopRule } from './desktop.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WEB_DIR = path.join(ROOT, 'web');
+
+// 未带 /grapenas 前缀时禁止直接访问的内置路径段（应用/反代路径不受影响）
+const BUILTIN_SEGMENTS = new Set(['/api', '/auth', '/ws', '/desktop', '/grape.svg', '/icons']);
+// 未带前缀时禁止的静态文件后缀：避免 /style.css、/app.js 这类被静态兜底命中
+const STATIC_EXT_RE = /\.(?:css|js|mjs|map|svg|png|jpe?g|webp|gif|ico|woff2?|json|txt|html?)$/i;
 const TOKEN_MAX_AGE = 7 * 24 * 60 * 60; // 秒
 
 const MIME = {
@@ -71,19 +75,26 @@ function safeRedirectPath(p) {
 function serveFile(res, filePath) {
   fs.readFile(filePath, (err, data) => {
     if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end('404 Not Found');
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
     const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-    // html/js/css 禁止缓存，避免拿到旧版前端
-    if (ext === '.html' || ext === '.js' || ext === '.css') {
-      headers['Cache-Control'] = 'no-cache';
+    // 页面与前端资源一律不缓存：避免升级后浏览器仍用旧版 HTML/JS/CSS（引着老路径的资源）
+    if (ext === '.html' || ext === '.js' || ext === '.css' || ext === '.json') {
+      headers['Cache-Control'] = 'no-store';
     }
     res.writeHead(200, headers);
     res.end(data);
   });
+}
+
+// 未认证/未命中时的文本响应：显式禁止缓存，避免浏览器把 401/404 存下来，
+// 登录成功后仍显示"样式/脚本没了"
+function sendText(res, status, text) {
+  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(text);
 }
 
 function resolveStatic(pathname) {
@@ -96,10 +107,118 @@ function resolveStatic(pathname) {
   }
 }
 
+// 应用侧边栏：把应用包目录内的相对路径解析成安全绝对路径（前缀 + realpath 双重防穿越）
+function resolveAppFile(app, rel) {
+  if (!app || !app.dir) return null;
+  const raw = String(rel || '').replace(/\\/g, '/').trim();
+  if (!raw || raw.startsWith('/') || raw.includes('..') || /^[A-Za-z]:/.test(raw)) return null;
+  const dir = path.normalize(app.dir);
+  const filePath = path.normalize(path.join(dir, raw));
+  if (!filePath.startsWith(dir)) return null;
+  try {
+    const realDir = fs.realpathSync(dir);
+    const realFile = fs.realpathSync(filePath);
+    if (!realFile.startsWith(realDir + path.sep)) return null;
+    return realFile;
+  } catch {
+    return null;
+  }
+}
+
+// 应用 id 不能占用前缀段本身（否则代理路径会与内置路径冲突）
+function isReservedAppId(id) {
+  return String(id || '').toLowerCase() === RESERVED_SEGMENT;
+}
+
+function appById(id) {
+  return /^[A-Za-z0-9_-]{1,32}$/.test(String(id || '')) ? getApp(id) : null;
+}
+
+const SIDEBAR_MIME = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+// 侧边栏图标 / 片段内静态资源：kind = 'icon' | 'asset'
+// 入口定位：entry 是 sidebar.json 里的下标；不带 entry 时回退到 config.json 的单入口
+function sidebarEntryOf(app, entryRaw) {
+  const entries = readAppSidebar(app);
+  if (entries && entries.length) {
+    const idx = entryRaw == null || entryRaw === '' ? 0 : Number(entryRaw);
+    return Number.isInteger(idx) && idx >= 0 && idx < entries.length ? entries[idx] : null;
+  }
+  if (app && app.sidebar && (entryRaw == null || entryRaw === '' || Number(entryRaw) === 0)) return app.sidebar;
+  return null;
+}
+
+function serveAppSidebarFile(res, id, entry, kind, file) {
+  const app = appById(id);
+  const item = sidebarEntryOf(app, entry);
+  const rel = kind === 'icon' ? item?.iconsvg : file;
+  const filePath = resolveAppFile(app, rel);
+  if (!filePath) {
+    sendText(res, 404, '404 Not Found');
+    return;
+  }
+  const ext = path.extname(filePath).toLowerCase();
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(404).end();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': SIDEBAR_MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-cache',
+    });
+    res.end(data);
+  });
+}
+
+// 侧边栏页面片段：读应用包里的 page，并把相对资源改写成 sidebar-asset 接口（带 entry 下标），
+// 这样片段注入到壳页面后，图片/CSS 仍能正确加载。
+function serveAppSidebarPage(res, id, entry) {
+  const app = appById(id);
+  const item = sidebarEntryOf(app, entry);
+  const filePath = resolveAppFile(app, item?.page);
+  if (!filePath) {
+    sendText(res, 404, '404 Not Found');
+    return;
+  }
+  const idx = entry == null || entry === '' ? 0 : Number(entry);
+  fs.readFile(filePath, 'utf8', (err, html) => {
+    if (err) {
+      res.writeHead(404).end();
+      return;
+    }
+    const base = `/api/apps/sidebar-asset?id=${encodeURIComponent(app.id)}&entry=${idx}&file=`;
+    const pageDir = path.posix.dirname(String(item.page).replace(/\\/g, '/'));
+    const body = html.replace(
+      /(\s(?:src|href)\s*=\s*["'])([^"']+)/g,
+      (match, attr, value) => {
+        if (/^(?:[a-z]+:|\/\/|#|data:|blob:)/i.test(value)) return match;
+        const rel = value.startsWith('/')
+          ? value.slice(1)
+          : path.posix.normalize(path.posix.join(pageDir === '.' ? '' : pageDir, value));
+        return `${attr}${base}${encodeURIComponent(rel)}`;
+      }
+    );
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+    res.end(body);
+  });
+}
+
 // 应用图标：data/packages/<id>/<config.json 中声明的图标>
 // 双重防穿越：词法前缀检查 + realpath 真实路径包含检查（防符号链接逃逸）
-function serveAppIcon(res, id) {
-  const app = /^[A-Za-z0-9_-]{1,32}$/.test(String(id || '')) ? getApp(id) : null;
+function serveAppIcon(res, id) {  const app = /^[A-Za-z0-9_-]{1,32}$/.test(String(id || '')) ? getApp(id) : null;
   if (!app || !app.icon || !app.dir) {
     res.writeHead(404);
     res.end();
@@ -108,7 +227,7 @@ function serveAppIcon(res, id) {
   const dir = path.normalize(app.dir);
   const filePath = path.normalize(path.join(dir, app.icon));
   if (!filePath.startsWith(dir)) {
-    res.writeHead(403);
+    res.writeHead(403, { 'Cache-Control': 'no-store' });
     res.end();
     return;
   }
@@ -158,7 +277,7 @@ async function handleAuth(req, res) {
   const token = createToken();
   res.setHeader(
     'Set-Cookie',
-    `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_MAX_AGE}`
+    `${COOKIE_NAME}=${token}; Path=${COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_MAX_AGE}`
   );
   log('info', settingUp ? `访问码初始化完成 (${ip})` : `登录成功 (${ip})`);
   sendJson(res, 200, { ok: true, redirect: safeRedirectPath(body.redirect) });
@@ -167,16 +286,63 @@ async function handleAuth(req, res) {
 // 撤销访问码授权：清空所有已签发的令牌（所有设备都需要重新输入访问码）
 function handleRevokeAuth(req, res) {
   const count = revokeAllTokens();
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=${COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=0`);
   log('info', `访问码授权已撤销（${count} 个已登录会话）`);
   sendJson(res, 200, { ok: true });
 }
 
 async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
+  // 路径约定：
+  //   内置路径（HTML 之外的接口/静态/WS）都在 /grapenas 前缀下：/grapenas/api/...、/grapenas/style.css、/grapenas/ws
+  //   应用与手动反向代理仍挂在根下：/<应用id>/...
+  //   壳页面在 "/"（/index.html 同义）
+  if (url.pathname === '/index.html') {
+    return serveFile(res, path.join(WEB_DIR, 'index.html'));
+  }
+  if (url.pathname === BASE_PATH || url.pathname.startsWith(BASE_PATH + '/')) {
+    url.pathname = url.pathname.slice(BASE_PATH.length) || '/';
+  } else {
+    // 没带前缀时：内置路径与静态文件一律拒绝，只有应用/反代路径留在根下
+    const firstSeg = url.pathname.split('/')[1] || '';
+    if (BUILTIN_SEGMENTS.has('/' + firstSeg) || STATIC_EXT_RE.test(url.pathname)) {
+      sendText(res, 404, `404 Not Found（内置路径统一在 ${BASE_PATH} 前缀下）`);
+      return;
+    }
+  }
   const pathname = url.pathname;
 
   // ---- 无需令牌的白名单 ----
+  // 应用用自己的密钥调用的接口（不是浏览器会话，因此放在鉴权门之前）
+  // 应用运行时刷新自己的侧边栏入口：POST /grapenas/api/reload_sidebar/<appid>
+  // 需要该应用的密钥（安装时生成，通过环境变量 GRAPENAS_APP_SECRET 下发）；
+  // secret 允许走查询参数，方便应用用最朴素的方式调用。
+  if (pathname.startsWith('/api/reload_sidebar/') && req.method === 'POST') {
+    const appId = decodeURIComponent(pathname.slice('/api/reload_sidebar/'.length));
+    const app = appById(appId);
+    if (!app) return sendJson(res, 404, { ok: false, error: '应用不存在' });
+    const provided = String(req.headers['x-grapenas-app-secret'] || url.searchParams.get('secret') || '');
+    if (!app.secret || provided !== app.secret) {
+      log('warn', `应用 ${appId} 刷新侧边栏被拒：密钥无效`);
+      return sendJson(res, 401, { ok: false, error: '密钥无效' });
+    }
+    const entries = readAppSidebar(app) || [];
+    broadcastEvent('sidebar', { app: app.id, entries: sidebarEntriesFor(app) });
+    log('info', `应用 ${appId} 侧边栏已刷新（${entries.length} 个入口）`);
+    return sendJson(res, 200, { ok: true, app: app.id, count: entries.length });
+  }
+
+  // 壳页面本身放行：未登录也返回外壳，前端发现未认证会自动跳登录页。
+  // 这样即使 cookie 作用域异常，也不会出现"登录成功却打不开 /"的死循环。
+  if (pathname === '/' && req.method === 'GET') {
+    return serveFile(res, path.join(WEB_DIR, 'index.html'));
+  }
+  // 外壳自身的前端资源也放行：壳页面既然公开，它的样式与脚本就不能要令牌，
+  // 否则未登录时会看到"只有 HTML、CSS/JS 全 401"的破页面。
+  // 注意：这些只是前端代码，任何数据接口与 WebSocket 仍然要令牌。
+  if (req.method === 'GET' && (pathname === '/style.css' || pathname === '/app.js')) {
+    return serveFile(res, path.join(WEB_DIR, pathname.slice(1)));
+  }
   if (pathname === '/api/auth/status' && req.method === 'GET') {
     return sendJson(res, 200, { ok: true, needSetup: !isAccessCodeSet(), authed: isAuthed(req) });
   }
@@ -184,7 +350,7 @@ async function handleRequest(req, res) {
     return handleAuth(req, res);
   }
   if (pathname === '/auth' && req.method === 'GET') {
-    if (isAuthed(req)) return redirect(res, '/');
+    if (isAuthed(req)) return redirect(res, withBase('/'));
     return serveFile(res, path.join(WEB_DIR, 'auth.html'));
   }
   if (pathname === '/grape.svg') {
@@ -194,16 +360,18 @@ async function handleRequest(req, res) {
   // ---- 其余一律先校验令牌 ----
   if (!isAuthed(req)) {
     if (pathname.startsWith('/api/')) {
+      res.setHeader('Cache-Control', 'no-store');
       return sendJson(res, 401, { ok: false, error: '未认证' });
     }
     // 仅页面导航重定向到访问码页；静态资源等直接 401，
     // 避免资源请求被 302 到登录页导致浏览器缓存污染（如图标被替换成 NAS 的）
     const accept = String(req.headers.accept || '');
     if (!accept.includes('text/html')) {
+      res.setHeader('Cache-Control', 'no-store');
       return sendJson(res, 401, { ok: false, error: '未认证' });
     }
     const back = pathname === '/' ? '/' : pathname + url.search;
-    return redirect(res, `/auth?redirect=${encodeURIComponent(back)}`);
+    return redirect(res, withBase(`/auth?redirect=${encodeURIComponent(back)}`));
   }
 
   if (pathname === '/api/auth/revoke' && req.method === 'POST') {
@@ -233,7 +401,22 @@ async function handleRequest(req, res) {
   if (pathname === '/api/apps/icon' && req.method === 'GET') {
     return serveAppIcon(res, url.searchParams.get('id'));
   }
-
+  // 应用侧边栏：图标、页面片段与片段内的静态资源（都从应用包目录里取，路径防穿越）
+  if (pathname === '/api/apps/sidebar-icon' && req.method === 'GET') {
+    return serveAppSidebarFile(res, url.searchParams.get('id'), url.searchParams.get('entry'), 'icon', null);
+  }
+  if (pathname === '/api/apps/sidebar-asset' && req.method === 'GET') {
+    return serveAppSidebarFile(
+      res,
+      url.searchParams.get('id'),
+      url.searchParams.get('entry'),
+      'asset',
+      url.searchParams.get('file')
+    );
+  }
+  if (pathname === '/api/apps/sidebar' && req.method === 'GET') {
+    return serveAppSidebarPage(res, url.searchParams.get('id'), url.searchParams.get('entry'));
+  }
   // ---- 文件管理 ----
   if (pathname === '/api/files/download' && req.method === 'GET') {
     try {
@@ -271,42 +454,11 @@ async function handleRequest(req, res) {
     return serveFile(res, path.join(WEB_DIR, 'index.html'));
   }
 
-  // ---- 控制桌面（内部代理到 webpg 子服务） ----
-  if (pathname === '/desktop' || pathname.startsWith('/desktop/')) {
-    if (!desktopSupported()) return sendJson(res, 404, { ok: false, error: '仅 Windows 系统支持控制桌面' });
-    if (!desktopStatus().running) return sendJson(res, 503, { ok: false, error: '桌面控制服务未启动' });
-    const dRule = desktopRule();
-    if (pathname === dRule.path) return redirect(res, '/desktop/');
-    // 只保留显示器选择，隐藏品牌标识/画质/帧率/缩放与操作按钮；
-    // 并把葡萄云的页面颜色同步到工具页面（同源 iframe，读取父页面 CSS 变量）
-    const desktopExtra =
-      '<style>#toolbar .brand,#toolbar .field:has(#qualityRange),#toolbar .field:has(#fpsRange),' +
-      '#toolbar .field:has(#scaleSelect),#fitBtn,#fullscreenBtn,#disconnectBtn{display:none !important;}' +
-      'select,input[type="password"]{background:var(--panel) !important;}' +
-      'button{background:var(--panel) !important;}' +
-      'button.active,button.primary{background:var(--accent) !important;color:#fff !important;}' +
-      '</style>' +
-      '<script>(function(){' +
-      'function sync(){try{' +
-      'var s=parent.document.documentElement.style;' +
-      'var v=function(n,f){var x=s.getPropertyValue(n).trim();return x||f;};' +
-      'var d=document.documentElement.style;' +
-      'd.setProperty("--bg",v("--bg","#0b0e14"));' +
-      'd.setProperty("--panel",v("--bg-panel","#141924"));' +
-      'd.setProperty("--text",v("--text","#e6e6e6"));' +
-      'd.setProperty("--muted",v("--text-muted","#8b93a7"));' +
-      'd.setProperty("--accent",v("--accent","#4c8dff"));' +
-      'd.setProperty("--border","rgba("+v("--accent-rgb","35, 42, 56")+", 0.25)");' +
-      '}catch(e){}}' +
-      'sync();setInterval(sync,800);})();<\/script>';
-    return proxyHttpRequest(req, res, dRule, toTargetPath(dRule, pathname, url.search), desktopExtra);
-  }
-
   // 反向代理（HTTP 部分；WebSocket 部分在 upgrade 处理中）
   const rule = findProxyRule(pathname);
   if (rule) {
     // 命中规则根路径时补尾部斜杠，保证被代理应用的相对路径资源解析正确
-    if (pathname === rule.path) return redirect(res, rule.path + '/' + (url.search || ''));
+    if (pathname === rule.path) return redirect(res, withBase(rule.path + '/' + (url.search || '')));
     return proxyHttpRequest(req, res, rule, toTargetPath(rule, pathname, url.search));
   }
 
@@ -319,8 +471,7 @@ async function handleRequest(req, res) {
   const refRule = findRefererRule(req);
   if (refRule) return proxyHttpRequest(req, res, refRule, pathname + url.search);
 
-  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('404 Not Found');
+  sendText(res, 404, '404 Not Found');
 }
 
 // 进程级兜底：任何异常都不应让服务无声退出
@@ -339,7 +490,7 @@ const server = http.createServer((req, res) => {
 setupWebSocket(server);
 
 server.listen(PORT, () => {
-  log('info', `GrapeNAS 葡萄云已启动: http://0.0.0.0:${PORT}`);
+  log('info', `GrapeNAS 葡萄云已启动: http://0.0.0.0:${PORT}` + `（站内路径前缀 ${BASE_PATH}）`);
   if (!isAccessCodeSet()) log('warn', '尚未设置访问码，首次访问将要求初始化');
   ensureAppsRunning(); // 后台启动所有登记的应用（已存活的跳过）
 });

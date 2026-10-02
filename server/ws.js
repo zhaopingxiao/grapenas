@@ -7,20 +7,19 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
-import { checkApp, startApp, stopApp, markAppStopping, syncAppProxyRules, removeAppProxyRules, appHasWebui, uninstallApp } from './apps.js';
+import { checkApp, startApp, stopApp, markAppStopping, syncAppProxyRules, removeAppProxyRules, appHasWebui, uninstallApp, readAppSidebar } from './apps.js';
 import { isStorageConfigured, getStoragePath, resolveStoragePath, setStoragePath, moveEntry, copyEntry } from './storage.js';
-import { desktopStatus, startDesktop, stopDesktop, desktopRule } from './desktop.js';
 
 export const COOKIE_NAME = 'grapenas_token';
 
 // 已认证客户端广播（主题色等全局事件）
 let wssRef = null;
 
-function broadcastEvent(event, data) {
+export function broadcastEvent(event, data) {
   if (!wssRef) return;
   const payload = JSON.stringify({ type: 'event', event, data });
   for (const client of wssRef.clients) {
@@ -44,6 +43,15 @@ function wsAuthed(req) {
   return false;
 }
 
+// 应用当前生效的侧边栏入口：应用没运行时返回空数组（入口全部隐藏）
+export function sidebarEntriesFor(app) {
+  if (!app || !checkApp(app).running) return [];
+  const fromFile = readAppSidebar(app);
+  if (fromFile && fromFile.length) return fromFile;
+  if (app.sidebar) return [app.sidebar]; // 兼容 config.json 里的单入口写法
+  return [];
+}
+
 export function setupWebSocket(server) {
   // noServer 模式：自行接管 upgrade，以便同时处理反向代理路径上的 WebSocket
   const wss = new WebSocketServer({ noServer: true });
@@ -57,27 +65,15 @@ export function setupWebSocket(server) {
       socket.destroy();
       return;
     }
+    // 除壳页面外，内置路径都带 /grapenas 前缀
+    if (url.pathname === BASE_PATH || url.pathname.startsWith(BASE_PATH + '/')) {
+      url.pathname = url.pathname.slice(BASE_PATH.length) || '/';
+    }
     const pathname = url.pathname;
 
     // NAS 自身通讯通道（令牌校验在 connection 中处理，保持 4401 语义）
     if (pathname === '/ws') {
       wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
-      return;
-    }
-
-    // 控制桌面内部代理（如 /desktop/ws?token=...）
-    if (pathname === '/desktop' || pathname.startsWith('/desktop/')) {
-      const cookies = parseCookies(req.headers.cookie);
-      if (!validateToken(cookies[COOKIE_NAME])) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-        socket.destroy();
-        return;
-      }
-      if (desktopStatus().running) {
-        proxyWsUpgrade(req, socket, head, desktopRule(), pathname, url.search);
-      } else {
-        socket.destroy();
-      }
       return;
     }
 
@@ -250,6 +246,14 @@ const handlers = {
         running: st.running,
         pid: st.pid,
         webui: appHasWebui(app.id),
+        // 侧边栏入口：sidebar.json（多入口）优先，其次 config.json 的 sidebar（单入口）
+        // 应用没在运行时不下发，前端据此隐藏该应用的所有入口
+        sidebar: sidebarEntriesFor(app).map((entry, i) => ({
+          index: i,
+          sidebar_name: entry.sidebar_name,
+          page: entry.page,
+          iconsvg: withBase(`/api/apps/sidebar-icon?id=${encodeURIComponent(app.id)}&entry=${i}`),
+        })),
       };
     }),
 
@@ -346,16 +350,6 @@ const handlers = {
     child.unref();
     log('info', `打开桌面快捷方式: ${sc.name}`);
     return { launched: true };
-  },
-
-  // ---- 控制桌面 ----
-  'desktop.status': () => desktopStatus(),
-
-  'desktop.start': () => startDesktop(),
-
-  'desktop.stop': () => {
-    stopDesktop();
-    return { running: false };
   },
 
   // ---- 页面颜色（背景模式 + 主题配色对） ----
@@ -474,6 +468,13 @@ function restartServer() {
 }
 
 // 校验应用表单输入
+// 应用 id 不能占用前缀段（grapenas）
+function assertAppIdFree(id) {
+  if (String(id || '').toLowerCase() === 'grapenas') {
+    throw new Error('应用 id 不可为 grapenas（与站内路径前缀冲突）');
+  }
+}
+
 function validateAppInput(data) {
   const id = String(data.id || '').trim();
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
@@ -494,6 +495,7 @@ function validateAppInput(data) {
     if (!Number.isInteger(p) || p < 1 || p > 65535) throw new Error('端口须为 1-65535 的整数');
     if (p === PORT) throw new Error('端口不可为 NAS 自身端口');
   }
+  assertAppIdFree(id);
   return { id, name, command, ports };
 }
 

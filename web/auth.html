@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>葡萄云 GrapeNAS · 访问验证</title>
-<link rel="icon" href="/grape.svg">
+<link rel="icon" href="/grapenas/grape.svg">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -263,7 +263,7 @@
 
     btnEl.disabled = true;
     try {
-      const res = await fetch('/api/auth', {
+      const res = await fetch('/grapenas/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, redirect: redirectTo }),
@@ -286,7 +286,7 @@
 
   // ---------- 状态查询：是否首次使用 / 是否已登录 ----------
 
-  fetch('/api/auth/status')
+  fetch('/grapenas/api/auth/status')
     .then((r) => r.json())
     .then((s) => {
       if (s.authed) {

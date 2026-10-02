@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>葡萄云 GrapeNAS</title>
-<link rel="icon" href="/grape.svg">
-<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/grapenas/grape.svg">
+<link rel="stylesheet" href="/grapenas/style.css">
 </head>
 <body>
 <div class="layout">
@@ -24,12 +24,8 @@
       </svg>
       <span>葡萄云</span>
     </div>
-    <nav class="nav">
-      <button class="nav-item active" data-view="dashboard">仪表盘</button>
-      <button class="nav-item" data-view="files">文件管理</button>
-      <button class="nav-item hidden" id="navDesktop" data-view="desktop">控制桌面</button>
-      <button class="nav-item" data-view="apps">应用</button>
-      <button class="nav-item" data-view="settings">选项</button>
+    <nav class="nav" id="navList">
+      <!-- 内置入口 + 应用侧边栏入口由 app.js 渲染（应用包 config.json 的 sidebar 字段） -->
     </nav>
     <div class="sidebar-footer">
       <div id="connStatus" class="conn">连接中…</div>
@@ -103,12 +99,12 @@
       <div id="appGrid" class="app-grid"></div>
     </section>
 
-    <!-- 控制桌面（仅 Windows 显示入口） -->
-    <section id="view-desktop" class="view hidden">
+    <!-- 应用侧边栏页面（应用包里的页面片段注入这里） -->
+    <section id="view-appview" class="view hidden">
       <div class="view-header">
-        <h2>控制桌面</h2>
+        <div class="crumbs" id="appViewCrumbs"></div>
       </div>
-      <div id="desktopBody"></div>
+      <div class="app-view-host" id="appViewHost"></div>
     </section>
 
     <!-- 选项：设置分组入口列表 -->
@@ -337,6 +333,6 @@
   </div>
 </div>
 <div id="toast" class="toast hidden"></div>
-<script src="/app.js"></script>
+<script src="/grapenas/app.js"></script>
 </body>
 </html>

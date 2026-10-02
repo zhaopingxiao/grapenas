@@ -54,6 +54,9 @@ body {
 }
 .nav { display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 12px 14px;
   border: none;
   border-radius: 10px;
@@ -496,6 +499,20 @@ body {
 }
 .mode-swatch:hover { transform: scale(1.05); }
 .mode-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.35); }
+
+/* 应用侧边栏片段容器 + 侧边栏图标 */
+.app-view-host { display: block; min-height: 120px; }
+.nav-icon-img {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  object-fit: contain;
+  /* 图标 fill 统一为 currentColor(=黑)，这里按文字色做滤镜换色 */
+  filter: invert(72%) sepia(12%) saturate(700%) hue-rotate(215deg) brightness(0.95);
+  opacity: 0.95;
+}
+.nav-item:hover .nav-icon-img { filter: invert(92%) sepia(8%) saturate(500%) hue-rotate(215deg); opacity: 1; }
+.nav-item.active .nav-icon-img { filter: invert(1) brightness(1.6); opacity: 1; }
 
 /* 控制桌面 */
 .desktop-frame {
