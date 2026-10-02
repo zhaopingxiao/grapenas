@@ -113,16 +113,6 @@ Header: x-grapenas-app-secret: <应用密钥>        # 也支持 ?secret=<密钥
 刷新成功后，葡萄云会把最新的入口列表通过 WebSocket 事件 `sidebar` 推给所有已连接的客户端，
 前端收到就重建侧边栏，不需要手动刷新页面。
 
-## 示例应用
-
-`sample-app/` 里有一个可直接安装的示例包 `hello.tar`：自带 HTTP 服务的 node 应用，安装后**网页**（`/hello/`）与**侧边栏**（「示例应用」入口）两种方式都能打开，两边共用同一个后端。
-
-```bash
-node sample-app/pack.mjs            # 改完 sample-app/hello/ 后重新打包成 hello.tar
-```
-
-把 `hello.tar` 拖到「应用」页即安装。当模板用：改 `config.json` 的 `id`/`name`/`port`/`sidebar`，改 `web/` 下的页面即可。
-
 ## 反向代理
 「功能 → 反向代理」添加规则：子路径 → 本机端口。例如把 4096 端口的服务映射到 `/grapenas/opencode`：
 
@@ -146,7 +136,6 @@ grapenas/
 │   ├── logger.js          # 内存环形日志 + 订阅推送
 │   └── util.js
 ├── web/                   # 前端（单壳页面，无构建）
-├── sample-app/            # 示例应用包源码 + 打包脚本
 └── restart_helper.js      # 网页"重启葡萄云"的独立助手
 ```
 
