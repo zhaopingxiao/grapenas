@@ -40,21 +40,6 @@
     <span class="topbar-title">葡萄云</span>
   </div>
 
-  <!-- beta：桌面 UI（开启后铺满窗口，独立于侧边栏布局） -->
-  <div id="desktopRoot" class="desktop-root hidden">
-    <div class="desktop-wallpaper"></div>
-    <div class="desktop-icons" id="desktopIcons"></div>
-    <div class="desktop-windows" id="desktopWindows"></div>
-    <div class="desktop-taskbar">
-      <button class="dtb-btn" id="desktopExitBtn" title="退出桌面模式">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M10 17l1.41-1.41L8.83 13H20v-2H8.83l2.58-2.59L10 7l-5 5 5 5zM4 5h8V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8v-2H4V5z"/></svg>
-        <span>退出桌面模式</span>
-      </button>
-      <div class="dtb-spacer"></div>
-      <div class="dtb-clock" id="desktopClock"></div>
-    </div>
-  </div>
-
   <main class="content">
     <!-- 仪表盘：系统信息 + 日志 -->
     <section id="view-dashboard" class="view">
@@ -142,12 +127,7 @@
       </div>
       <ul class="menu-list">
         <li class="menu-item" data-goto="themecolor"><span>页面颜色</span><span class="menu-arrow">›</span></li>
-        <li class="menu-item" id="desktopUiToggle">
-          <span>桌面 UI <span class="beta-tag">beta</span></span>
-          <span class="toggle-switch" id="desktopUiSwitch" role="switch" aria-checked="false"><i></i></span>
-        </li>
       </ul>
-      <p class="menu-hint">开启后进入桌面模式：壁纸 + 图标（文件管理 / 应用 / 选项），点图标打开可拖拽、可最大化最小化的窗口。</p>
     </section>
 
     <!-- 页面颜色 -->
