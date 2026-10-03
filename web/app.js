@@ -46,6 +46,7 @@ function connect() {
     checkStorageConfig();
     syncTheme();
     loadSidebarApps();
+    syncDesktop();
   };
 
   ws.onmessage = (e) => {
@@ -103,6 +104,10 @@ function handleEvent(msg) {
   // 应用在运行时刷新了自己的侧边栏入口（/grapenas/api/reload_sidebar/<id>）
   if (msg.event === 'sidebar') {
     loadSidebarApps();
+  }
+  // 桌面 UI 开关（任意客户端切换都会广播，保持一致）
+  if (msg.event === 'desktop') {
+    applyDesktop(msg.data && msg.data.enabled);
   }
 }
 
@@ -178,6 +183,694 @@ function applyNavActive() {
         : b.dataset.view === activeNav;
     b.classList.toggle('active', isActive);
   });
+}
+
+
+// ==================== beta：桌面 UI ====================
+// 开启后铺满窗口：壁纸 + 桌面图标（文件管理 / 应用 / 选项）+ 可拖拽、可最大化最小化的窗口
+
+let desktopOn = false;
+let deskZ = 40; // 窗口层级递增
+const deskWindows = new Map(); // key -> { el, body, title, minimized }
+
+const DESKTOP_ICONS = [
+  { key: 'files', name: '文件管理', icon: '/grapenas/icons/files.svg' },
+  { key: 'apps', name: '应用', icon: '/grapenas/icons/apps.svg' },
+  { key: 'settings', name: '选项', icon: '/grapenas/icons/settings.svg' },
+];
+
+async function syncDesktop() {
+  try {
+    const res = await call('desktop.get');
+    applyDesktop(Boolean(res && res.enabled));
+  } catch {
+    applyDesktop(false);
+  }
+}
+
+function applyDesktop(on) {
+  desktopOn = Boolean(on);
+  const root = document.getElementById('desktopRoot');
+  if (!root) return;
+  root.classList.toggle('hidden', !desktopOn);
+  document.body.classList.toggle('desktop-mode', desktopOn);
+  renderDesktopToggle();
+  if (desktopOn) {
+    renderDesktopIcons();
+    startDesktopClock();
+  } else {
+    stopDesktopClock();
+    closeAllDesktopWindows();
+  }
+}
+
+function toggleDesktop(on) {
+  call('desktop.set', { enabled: on }).catch((err) => toast(err.message, true));
+}
+
+function renderDesktopToggle() {
+  const sw = document.getElementById('desktopUiSwitch');
+  if (!sw) return;
+  sw.classList.toggle('on', desktopOn);
+  sw.setAttribute('aria-checked', String(desktopOn));
+}
+
+// ---- 图标 ----
+function renderDesktopIcons() {
+  const wrap = document.getElementById('desktopIcons');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const add = (key, name, icon, onOpen) => {
+    const btn = document.createElement('button');
+    btn.className = 'desk-icon';
+    btn.dataset.key = key;
+    const box = document.createElement('span');
+    box.className = 'desk-icon-img';
+    const img = document.createElement('img');
+    img.src = icon;
+    img.alt = '';
+    box.appendChild(img);
+    const label = document.createElement('span');
+    label.className = 'desk-icon-name';
+    label.textContent = name;
+    btn.append(box, label);
+    btn.addEventListener('dblclick', onOpen);
+    btn.addEventListener('click', onOpen); // 单击即开（触屏也顺手）
+    wrap.appendChild(btn);
+  };
+  for (const it of DESKTOP_ICONS) {
+    add(it.key, it.name, it.icon, () => openDesktopView(it.key, it.name));
+  }
+  // 应用图标：点击跳到该应用的页面
+  for (const app of appsList) {
+    add('app:' + app.id, app.name || app.id, BASE + '/api/apps/icon?id=' + encodeURIComponent(app.id), () => {
+      if (!app.running) return toast(`应用「${app.name || app.id}」未在运行`, true);
+      if (appHasSidebar(app)) {
+        // 有侧边栏入口：直接切到它的第一个入口页
+        switchView(APP_VIEW, { app: app.id, entry: app.sidebar[0].index || 0, force: true });
+      } else if (app.webui) {
+        window.open(BASE + '/' + encodeURIComponent(app.id) + '/', '_blank');
+      } else {
+        toast('该应用没有界面');
+      }
+    });
+  }
+}
+
+function appHasSidebar(app) {
+  return Boolean(app && Array.isArray(app.sidebar) && app.sidebar.length);
+}
+
+// ---- 窗口 ----
+const DESK_ICONS_SVG = {
+  min: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 12h14v2H5z"/></svg>',
+  max: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 5h14v14H5V5zm2 2v10h10V7H7z"/></svg>',
+  close: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>',
+};
+
+function openDesktopWindow(key, title, render) {
+  const layer = document.getElementById('desktopWindows');
+  if (!layer) return null;
+  const exist = deskWindows.get(key);
+  if (exist) {
+    exist.el.classList.remove('minimized');
+    focusDesktopWindow(key);
+    return exist;
+  }
+  const el = document.createElement('div');
+  el.className = 'desk-window';
+  el.dataset.key = key;
+  // 层叠出现，避免完全重叠
+  const offset = deskWindows.size * 28;
+  const w = Math.min(920, Math.max(380, window.innerWidth - 160));
+  const h = Math.min(620, Math.max(280, window.innerHeight - 180));
+  el.style.width = w + 'px';
+  el.style.height = h + 'px';
+  el.style.left = Math.max(12, (window.innerWidth - w) / 2 - 60 + offset) + 'px';
+  el.style.top = Math.max(12, (window.innerHeight - h) / 2 - 40 + offset) + 'px';
+
+  const bar = document.createElement('div');
+  bar.className = 'desk-titlebar';
+  const titleEl = document.createElement('span');
+  titleEl.className = 'desk-title';
+  titleEl.textContent = title;
+  const btnMin = document.createElement('button');
+  btnMin.className = 'desk-wbtn';
+  btnMin.title = '最小化';
+  btnMin.innerHTML = DESK_ICONS_SVG.min;
+  const btnMax = document.createElement('button');
+  btnMax.className = 'desk-wbtn';
+  btnMax.title = '最大化';
+  btnMax.innerHTML = DESK_ICONS_SVG.max;
+  const btnClose = document.createElement('button');
+  btnClose.className = 'desk-wbtn close';
+  btnClose.title = '关闭';
+  btnClose.innerHTML = DESK_ICONS_SVG.close;
+  bar.append(titleEl, btnMin, btnMax, btnClose);
+
+  const body = document.createElement('div');
+  body.className = 'desk-window-body';
+  const grip = document.createElement('div');
+  grip.className = 'desk-resize';
+  el.append(bar, body, grip);
+  layer.appendChild(el);
+
+  const win = { el, body, bar, titleEl, minimized: false, maximized: false, prev: null };
+  deskWindows.set(key, win);
+
+  btnMin.addEventListener('click', (e) => {
+    e.stopPropagation();
+    win.minimized = true;
+    el.classList.add('minimized');
+  });
+  btnMax.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMaximize(key);
+  });
+  btnClose.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeDesktopWindow(key);
+  });
+  bar.addEventListener('dblclick', () => toggleMaximize(key));
+  el.addEventListener('mousedown', () => focusDesktopWindow(key));
+
+  makeDraggable(win, bar);
+  makeResizable(win, grip);
+
+  focusDesktopWindow(key);
+  if (render) Promise.resolve(render(body, titleEl)).catch((err) => toast(err.message, true));
+  return win;
+}
+
+function focusDesktopWindow(key) {
+  const win = deskWindows.get(key);
+  if (!win) return;
+  deskWindows.forEach((w) => w.el.classList.remove('focused'));
+  win.el.classList.add('focused');
+  win.el.style.zIndex = String(++deskZ);
+}
+
+function toggleMaximize(key) {
+  const win = deskWindows.get(key);
+  if (!win) return;
+  const el = win.el;
+  if (win.maximized) {
+    Object.assign(el.style, win.prev);
+    el.classList.remove('maximized');
+    win.maximized = false;
+  } else {
+    win.prev = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+    el.classList.add('maximized');
+    Object.assign(el.style, { left: '0px', top: '0px', width: '100%', height: 'calc(100% - 52px)' });
+    win.maximized = true;
+  }
+  focusDesktopWindow(key);
+}
+
+function closeDesktopWindow(key) {
+  const win = deskWindows.get(key);
+  if (!win) return;
+  const body = win.body;
+  const mod = body.__grapenasModule;
+  if (mod && typeof mod.unmount === 'function') {
+    try {
+      mod.unmount();
+    } catch {
+      /* 卸载失败不影响关闭 */
+    }
+    body.__grapenasModule = null;
+  }
+  win.el.remove();
+  deskWindows.delete(key);
+}
+
+function closeAllDesktopWindows() {
+  for (const key of Array.from(deskWindows.keys())) closeDesktopWindow(key);
+}
+
+function makeDraggable(win, handle) {
+  let sx = 0;
+  let sy = 0;
+  let ox = 0;
+  let oy = 0;
+  let dragging = false;
+  handle.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.desk-wbtn')) return;
+    if (win.maximized) return;
+    dragging = true;
+    sx = e.clientX;
+    sy = e.clientY;
+    ox = parseFloat(win.el.style.left) || 0;
+    oy = parseFloat(win.el.style.top) || 0;
+    e.preventDefault();
+    const move = (ev) => {
+      if (!dragging) return;
+      const nx = Math.max(-40, ox + ev.clientX - sx);
+      const ny = Math.max(0, oy + ev.clientY - sy);
+      win.el.style.left = nx + 'px';
+      win.el.style.top = ny + 'px';
+    };
+    const up = () => {
+      dragging = false;
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
+function makeResizable(win, grip) {
+  let sx = 0;
+  let sy = 0;
+  let ow = 0;
+  let oh = 0;
+  grip.addEventListener('mousedown', (e) => {
+    if (win.maximized) return;
+    sx = e.clientX;
+    sy = e.clientY;
+    ow = parseFloat(win.el.style.width) || win.el.offsetWidth;
+    oh = parseFloat(win.el.style.height) || win.el.offsetHeight;
+    e.preventDefault();
+    e.stopPropagation();
+    const move = (ev) => {
+      win.el.style.width = Math.max(320, ow + ev.clientX - sx) + 'px';
+      win.el.style.height = Math.max(200, oh + ev.clientY - sy) + 'px';
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
+// 打开一个「内置视图」窗口：内容渲染到窗口里，不影响主界面的当前视图
+function openDesktopView(key, name) {
+  openDesktopWindow(key, name, async (body, titleEl) => {
+    if (key === 'files') {
+      await renderFilesInto(body);
+    } else if (key === 'apps') {
+      await renderAppsInto(body);
+    } else if (key === 'settings') {
+      renderSettingsInto(body);
+    } else {
+      body.innerHTML = '<p class="muted">暂不支持</p>';
+    }
+    titleEl.textContent = name;
+  });
+}
+
+// ---- 复用的视图渲染（支持渲染到任意容器；主视图走同一套函数） ----
+function panel(container, title, extraClass) {
+  const sec = document.createElement('section');
+  sec.className = 'view' + (extraClass ? ' ' + extraClass : '');
+  const head = document.createElement('div');
+  head.className = 'view-header';
+  const h2 = document.createElement('h2');
+  h2.textContent = title;
+  head.appendChild(h2);
+  sec.appendChild(head);
+  container.appendChild(sec);
+  return sec;
+}
+
+function renderSettingsInto(container) {
+  container.innerHTML = '';
+  const sec = panel(container, '选项');
+  const ul = document.createElement('ul');
+  ul.className = 'menu-list';
+  const items = [
+    { label: '重启葡萄云', danger: true },
+    { label: '个性化设置', goto: 'personalization' },
+    { label: '安全设置', goto: 'security' },
+    { label: '存储设置', goto: 'storagesettings' },
+  ];
+  for (const it of items) {
+    const li = document.createElement('li');
+    li.className = 'menu-item' + (it.danger ? ' menu-item-danger' : '');
+    const span = document.createElement('span');
+    span.textContent = it.label;
+    li.appendChild(span);
+    if (it.goto) {
+      const arrow = document.createElement('span');
+      arrow.className = 'menu-arrow';
+      arrow.textContent = '›';
+      li.appendChild(arrow);
+      li.addEventListener('click', () => {
+        closeAllDesktopWindows();
+        switchView(it.goto);
+      });
+    } else {
+      li.addEventListener('click', () => {
+        if (window.confirm('确认重启葡萄云？')) call('system.restart').catch((err) => toast(err.message, true));
+      });
+    }
+    ul.appendChild(li);
+  }
+  sec.appendChild(ul);
+}
+
+function renderAppsInto(container) {
+  return new Promise((resolve) => {
+    container.innerHTML = '<p class="muted">加载中…</p>';
+    Promise.all([call('apps.list'), call('shortcuts.list')])
+      .then(([apps, shortcuts]) => {
+        container.innerHTML = '';
+        const sec = panel(container, '应用');
+        const grid = document.createElement('div');
+        grid.className = 'apps-grid';
+        for (const app of apps) {
+          const card = document.createElement('div');
+          card.className = 'app-card';
+          const ic = document.createElement('img');
+          ic.className = 'app-icon';
+          ic.src = BASE + '/api/apps/icon?id=' + encodeURIComponent(app.id);
+          ic.alt = '';
+          const nm = document.createElement('div');
+          nm.className = 'app-name';
+          nm.textContent = app.name || app.id;
+          const st = document.createElement('div');
+          st.className = 'app-state ' + (app.running ? 'ok' : 'off');
+          st.textContent = app.running ? '运行中' : '已停止';
+          card.append(ic, nm, st);
+          card.addEventListener('click', () => {
+            if (!app.running) {
+              toast('应用未在运行，正在启动…');
+              call('apps.start', { id: app.id }).then(() => toast('已启动')).catch((e) => toast(e.message, true));
+              return;
+            }
+            if (appHasSidebar(app)) {
+              closeAllDesktopWindows();
+              switchView(APP_VIEW, { app: app.id, entry: app.sidebar[0].index || 0, force: true });
+            } else if (app.webui) {
+              window.open(BASE + '/' + encodeURIComponent(app.id) + '/', '_blank');
+            } else {
+              toast('该应用没有界面');
+            }
+          });
+          grid.appendChild(card);
+        }
+        if (!apps.length) grid.innerHTML = '<p class="muted">还没有安装应用</p>';
+        sec.appendChild(grid);
+        if (shortcuts && shortcuts.length) {
+          const h3 = document.createElement('h3');
+          h3.textContent = '快捷方式';
+          h3.className = 'section-sub';
+          sec.appendChild(h3);
+          const row = document.createElement('div');
+          row.className = 'shortcut-row';
+          for (const sc of shortcuts) {
+            const b = document.createElement('button');
+            b.className = 'shortcut-btn';
+            b.textContent = sc.name;
+            b.addEventListener('click', () => call('shortcuts.launch', { id: sc.id }).then(() => toast('已启动 ' + sc.name)).catch((e) => toast(e.message, true)));
+            row.appendChild(b);
+          }
+          sec.appendChild(row);
+        }
+        resolve();
+      })
+      .catch((err) => {
+        container.innerHTML = '';
+        const sec = panel(container, '应用');
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = '加载失败：' + err.message;
+        sec.appendChild(p);
+        resolve();
+      });
+  });
+}
+
+// 文件管理窗口：自带状态与渲染（与主视图的文件页互不影响）
+function renderFilesInto(container) {
+  return new Promise((resolve) => {
+    container.innerHTML = '';
+    const sec = panel(container, '文件管理', 'files-view');
+
+    let cwd = ''; // 相对存储根：''=根，'user/xx'=某目录
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'files-toolbar';
+    const mk = (label) => {
+      const b = document.createElement('button');
+      b.className = 'btn small';
+      b.textContent = label;
+      return b;
+    };
+    const up = mk('上一级');
+    const mkdir = mk('新建文件夹');
+    const upload = mk('上传文件');
+    const btnRefresh = mk('刷新');
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.multiple = true;
+    fileInput.hidden = true;
+    toolbar.append(up, mkdir, upload, btnRefresh, fileInput);
+
+    const crumbs = document.createElement('div');
+    crumbs.className = 'crumbs';
+    const list = document.createElement('div');
+    list.className = 'file-list';
+    sec.append(toolbar, crumbs, list);
+
+    const drawer = document.createElement('div');
+    drawer.className = 'desk-drawer hidden';
+    sec.appendChild(drawer);
+
+    const segsOf = () => {
+      const out = [{ label: '文件管理', path: '' }];
+      if (cwd) {
+        const parts = cwd.split('/').filter(Boolean);
+        let cur = '';
+        for (const p of parts) {
+          cur = cur ? cur + '/' + p : p;
+          out.push({ label: p === 'user' ? '我的文件' : p === '.package' ? '应用文件' : p, path: cur });
+        }
+      }
+      return out;
+    };
+
+    const paintCrumbs = () => {
+      crumbs.innerHTML = '';
+      const segs = segsOf();
+      segs.forEach((seg, i) => {
+        const el = document.createElement('span');
+        el.className = 'crumb' + (i === segs.length - 1 ? ' current' : '');
+        el.textContent = seg.label;
+        if (i !== segs.length - 1) {
+          el.addEventListener('click', () => {
+            cwd = seg.path;
+            refresh();
+          });
+        }
+        crumbs.appendChild(el);
+        if (i !== segs.length - 1) {
+          const sep = document.createElement('span');
+          sep.className = 'crumb-sep';
+          sep.textContent = '›';
+          crumbs.appendChild(sep);
+        }
+      });
+    };
+
+    const doUpload = async (file) => {
+      const res = await fetch(
+        BASE + '/api/files/upload?path=' + encodeURIComponent(cwd) + '&name=' + encodeURIComponent(file.name),
+        { method: 'POST', body: file }
+      );
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error || '上传失败');
+    };
+
+    const openDrawer = (title, build) => {
+      drawer.innerHTML = '';
+      drawer.classList.remove('hidden');
+      const head = document.createElement('div');
+      head.className = 'desk-drawer-head';
+      const t = document.createElement('b');
+      t.textContent = title;
+      const x = document.createElement('button');
+      x.className = 'desk-wbtn close';
+      x.textContent = '✕';
+      x.addEventListener('click', () => drawer.classList.add('hidden'));
+      head.append(t, x);
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'desk-drawer-body';
+      drawer.append(head, bodyEl);
+      build(bodyEl);
+    };
+
+    const refresh = async () => {
+      paintCrumbs();
+      // 根目录：与主视图一致，先给「我的文件 / 应用文件」两个入口
+      if (!cwd) {
+        list.innerHTML = '';
+        for (const [rel, label] of [
+          ['user', '我的文件'],
+          ['.package', '应用文件'],
+        ]) {
+          const row = document.createElement('div');
+          row.className = 'file-row is-dir';
+          row.innerHTML =
+            '<span class="file-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></span>' +
+            '<span class="file-name">' +
+            label +
+            '</span><span class="file-size">目录</span>';
+          row.addEventListener('click', () => {
+            cwd = rel;
+            refresh();
+          });
+          list.appendChild(row);
+        }
+        resolve();
+        return;
+      }
+      list.innerHTML = '<p class="muted">加载中…</p>';
+      try {
+        const data = await call('files.list', { path: cwd });
+        const entries = (data && data.entries) || [];
+        list.innerHTML = '';
+        if (!entries.length) {
+          list.innerHTML = '<p class="muted">这个目录是空的</p>';
+        }
+        for (const e of entries) {
+          const row = document.createElement('div');
+          row.className = 'file-row' + (e.dir ? ' is-dir' : '');
+          const icon = document.createElement('span');
+          icon.className = 'file-icon';
+          icon.innerHTML = e.dir
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM13 9V3.5L18.5 9H13z"/></svg>';
+          const name = document.createElement('span');
+          name.className = 'file-name';
+          name.textContent = e.name;
+          const size = document.createElement('span');
+          size.className = 'file-size';
+          size.textContent = e.dir ? '目录' : formatSize(e.size);
+          const acts = document.createElement('span');
+          acts.className = 'file-acts';
+          if (!e.dir) {
+            const dl = document.createElement('button');
+            dl.className = 'btn small';
+            dl.textContent = '下载';
+            dl.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const a = document.createElement('a');
+              a.href = BASE + '/api/files/download?path=' + encodeURIComponent(cwd ? cwd + '/' + e.name : e.name);
+              a.click();
+            });
+            acts.appendChild(dl);
+          }
+          const rm = document.createElement('button');
+          rm.className = 'btn small danger';
+          rm.textContent = '删除';
+          rm.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            if (!window.confirm('删除「' + e.name + '」？')) return;
+            try {
+              await call('files.delete', { path: cwd ? cwd + '/' + e.name : e.name });
+              toast('已删除 ' + e.name);
+              refresh();
+            } catch (err) {
+              toast(err.message, true);
+            }
+          });
+          acts.appendChild(rm);
+          row.append(icon, name, size, acts);
+          row.addEventListener('click', () => {
+            if (e.dir) {
+              cwd = cwd ? cwd + '/' + e.name : e.name;
+              refresh();
+            }
+          });
+          list.appendChild(row);
+        }
+        resolve();
+      } catch (err) {
+        list.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'muted';
+        p.textContent = '读取失败：' + err.message;
+        list.appendChild(p);
+        resolve();
+      }
+    };
+
+    up.addEventListener('click', () => {
+      if (!cwd) return;
+      const parts = cwd.split('/').filter(Boolean);
+      parts.pop();
+      cwd = parts.join('/');
+      refresh();
+    });
+    btnRefresh.addEventListener('click', () => refresh());
+    upload.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const files = Array.from(fileInput.files || []);
+      fileInput.value = '';
+      for (const f of files) {
+        try {
+          await doUpload(f);
+          toast('已上传 ' + f.name);
+        } catch (err) {
+          toast(f.name + ' 上传失败：' + err.message, true);
+        }
+      }
+      refresh();
+    });
+    mkdir.addEventListener('click', () => {
+      openDrawer('新建文件夹', (bodyEl) => {
+        const input = document.createElement('input');
+        input.className = 'input';
+        input.placeholder = '文件夹名称';
+        const ok = document.createElement('button');
+        ok.className = 'btn';
+        ok.textContent = '创建';
+        ok.addEventListener('click', async () => {
+          const name = input.value.trim();
+          if (!name) return toast('请输入名称', true);
+          try {
+            await call('files.mkdir', { path: cwd, name });
+            toast('已创建 ' + name);
+            drawer.classList.add('hidden');
+            refresh();
+          } catch (err) {
+            toast(err.message, true);
+          }
+        });
+        bodyEl.append(input, ok);
+      });
+    });
+
+    refresh();
+  });
+}
+
+function formatSize(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
+  if (v < 1024 * 1024 * 1024) return (v / 1024 / 1024).toFixed(1) + ' MB';
+  return (v / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+// 桌面时钟
+let desktopClockTimer = 0;
+function startDesktopClock() {
+  stopDesktopClock();
+  const tick = () => {
+    const el = document.getElementById('desktopClock');
+    if (el) el.textContent = new Date().toLocaleString('zh-CN', { hour12: false });
+  };
+  tick();
+  desktopClockTimer = setInterval(tick, 1000);
+}
+function stopDesktopClock() {
+  if (desktopClockTimer) clearInterval(desktopClockTimer);
+  desktopClockTimer = 0;
 }
 
 // 侧边栏入口来自应用列表（应用包 config.json 的 sidebar 字段）
@@ -423,6 +1116,7 @@ function loadPersonalizationView() {
     { label: '选项', click: () => switchView('settings') },
     { label: '个性化设置', current: true },
   ]);
+  renderDesktopToggle();
 }
 
 async function loadThemeColorView() {
@@ -1414,6 +2108,16 @@ document.getElementById('navList').addEventListener('click', (e) => {
 document.querySelectorAll('.menu-item[data-goto]').forEach((li) =>
   li.addEventListener('click', () => switchView(li.dataset.goto))
 );
+
+// beta：个性化设置里的「桌面 UI」开关
+document.getElementById('desktopUiToggle')?.addEventListener('click', () => {
+  toggleDesktop(!desktopOn);
+});
+
+// beta：桌面模式下退出
+document.getElementById('desktopExitBtn')?.addEventListener('click', () => {
+  toggleDesktop(false);
+});
 document.querySelectorAll('.crumb').forEach((b) =>
   b.addEventListener('click', () => switchView(b.dataset.view))
 );

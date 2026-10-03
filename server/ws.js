@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase, getDesktopUi, setDesktopUi } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -183,6 +183,14 @@ const handlers = {
     nodeVersion: process.version,
     serverTime: Date.now(),
   }),
+
+  'desktop.get': () => ({ enabled: getDesktopUi() }),
+  'desktop.set': (data) => {
+    const enabled = setDesktopUi(data && data.enabled);
+    log('info', `桌面 UI 已${enabled ? '开启' : '关闭'}`);
+    broadcastEvent('desktop', { enabled });
+    return { enabled };
+  },
 
   'settings.get': () => ({
     accessCodeSet: isAccessCodeSet(),

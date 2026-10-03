@@ -37,6 +37,7 @@ const config = {
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
   shortcuts: [], // 桌面快捷方式: [{ id, name, lnk }]
+  desktopUi: false, // beta：桌面 UI（壁纸 + 图标 + 可拖拽窗口）
 };
 
 export function loadConfig() {
@@ -154,6 +155,18 @@ export function getThemeMode() {
 
 export function getThemePair() {
   return config.themePair || 'purple';
+}
+
+// ---- beta：桌面 UI 开关 ----
+
+export function getDesktopUi() {
+  return Boolean(config.desktopUi);
+}
+
+export function setDesktopUi(on) {
+  config.desktopUi = Boolean(on);
+  persist();
+  return config.desktopUi;
 }
 
 export function setTheme(mode, pair) {
