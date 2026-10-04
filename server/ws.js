@@ -6,8 +6,8 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase } from './config.js';
+import { validateToken, changeAccessCode, userInfo, setAdminUser, hasUser, revokeAllTokens } from './auth.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase, setUserAuthEnabled } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -194,6 +194,30 @@ const handlers = {
     }
     log('info', '访问码已通过设置页修改');
     return { changed: true };
+  },
+
+  // ---- 用户管理（测试阶段：只有一个管理员账号） ----
+  'user.get': () => userInfo(),
+  'user.set': (data) => {
+    const username = String((data && data.username) || '').trim();
+    const password = String((data && data.password) || '');
+    const confirm = String((data && data.confirm) || '');
+    if (password !== confirm) throw new Error('两次输入的密码不一致');
+    const r = setAdminUser(username, password);
+    if (!r.ok) throw new Error(r.error);
+    log('info', `管理员账号已保存：${username}`);
+    broadcastEvent('user', userInfo());
+    return userInfo();
+  },
+  'user.toggle': (data) => {
+    const on = Boolean(data && data.enabled);
+    if (on && !hasUser()) throw new Error('请先创建管理员账号，再开启用户管理');
+    setUserAuthEnabled(on);
+    // 开关变化会影响"已认证"的判定：清空所有会话，避免出现半认证状态
+    const n = revokeAllTokens();
+    log('info', `用户管理已${on ? '开启' : '关闭'}（${n} 个登录会话需要重新登录）`);
+    broadcastEvent('user', userInfo());
+    return { ...userInfo(), revoked: n };
   },
 
   'proxy.list': () => getProxies(),

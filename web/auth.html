@@ -109,6 +109,16 @@
       <div class="code-boxes" id="group1"></div>
       <p class="group-label hidden" id="label2">确认访问码</p>
       <div class="code-boxes hidden" id="group2"></div>
+      <div class="user-step hidden" id="userStep">
+        <label class="field">
+          <span>账号</span>
+          <input id="username" type="text" autocomplete="username" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>密码</span>
+          <input id="password" type="password" autocomplete="current-password">
+        </label>
+      </div>
       <button id="btn" type="submit">进 入</button>
     </form>
     <p class="error" id="error"></p>
@@ -118,6 +128,7 @@
   const params = new URLSearchParams(location.search);
   const redirectTo = params.get('redirect') || '/';
   let needSetup = false;
+  let needUser = false; // 是否需要在访问码之后再验证账号密码
 
   const cardEl = document.getElementById('card');
   const subtitleEl = document.getElementById('subtitle');
@@ -127,6 +138,9 @@
   const group2El = document.getElementById('group2');
   const btnEl = document.getElementById('btn');
   const errorEl = document.getElementById('error');
+  const userStepEl = document.getElementById('userStep');
+  const usernameEl = document.getElementById('username');
+  const passwordEl = document.getElementById('password');
 
   // ---------- 分格输入框 ----------
 
@@ -261,20 +275,44 @@
       }
     }
 
+    // 用户管理开启时，需要账号密码：先在前端确认填了，再一起提交
+    const username = usernameEl.value.trim();
+    const password = passwordEl.value;
+    if (needUser && !username) {
+      errorEl.textContent = '请输入账号';
+      usernameEl.focus();
+      shake();
+      return;
+    }
+    if (needUser && !password) {
+      errorEl.textContent = '请输入密码';
+      passwordEl.focus();
+      shake();
+      return;
+    }
+
     btnEl.disabled = true;
     try {
       const res = await fetch('/grapenas/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, redirect: redirectTo }),
+        body: JSON.stringify({ code, username, password, redirect: redirectTo }),
       });
       const data = await res.json();
       if (data.ok) {
         location.replace(data.redirect || '/');
+      } else if (data.needUser && !data.error) {
+        // 访问码已通过，进入第二关：账号密码
+        enterUserStep();
       } else {
         errorEl.textContent = data.error || '验证失败';
-        boxes1.forEach((b) => (b.value = ''));
-        boxes1[0].focus();
+        if (data.stage === 'user') {
+          passwordEl.value = '';
+          passwordEl.focus();
+        } else {
+          boxes1.forEach((b) => (b.value = ''));
+          boxes1[0].focus();
+        }
         shake();
       }
     } catch {
@@ -283,6 +321,18 @@
       btnEl.disabled = false;
     }
   });
+
+  // 进入第二关：访问码已通过，显示账号密码并把焦点交给账号输入框
+  function enterUserStep() {
+    if (needUser && !userStepEl.classList.contains('hidden')) return;
+    needUser = true;
+    userStepEl.classList.remove('hidden');
+    subtitleEl.textContent = '访问码已通过，请输入管理员账号';
+    btnEl.textContent = '登 录';
+    errorEl.textContent = '';
+    if (!usernameEl.value) usernameEl.focus();
+    else passwordEl.focus();
+  }
 
   // ---------- 状态查询：是否首次使用 / 是否已登录 ----------
 
@@ -300,6 +350,8 @@
         label2El.classList.remove('hidden');
         group2El.classList.remove('hidden');
         btnEl.textContent = '设置并进入';
+      } else if (s.needUser) {
+        subtitleEl.textContent = '请输入 8 位访问码，然后验证管理员账号';
       }
     })
     .catch(() => { errorEl.textContent = '无法连接服务器'; });

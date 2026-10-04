@@ -152,7 +152,40 @@
       </div>
       <ul class="menu-list">
         <li class="menu-item" data-goto="accesscode"><span>访问码</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" data-goto="usermanage"><span>用户管理</span><span class="menu-arrow">›</span></li>
       </ul>
+    </section>
+
+    <!-- 用户管理（测试阶段：只有一个管理员账号） -->
+    <section id="view-usermanage" class="view hidden">
+      <div class="view-header">
+        <div class="crumbs" id="crumbsUsermanage"></div>
+      </div>
+      <div class="panel-card">
+        <p class="muted" id="userHint">读取中…</p>
+        <form id="userForm" class="form">
+          <label>管理员账号
+            <input id="userName" type="text" autocomplete="off" spellcheck="false" placeholder="例如 admin">
+          </label>
+          <label>密码（至少 6 位）
+            <input id="userPass" type="password" autocomplete="new-password">
+          </label>
+          <label>确认密码
+            <input id="userPass2" type="password" autocomplete="new-password">
+          </label>
+          <div class="form-actions">
+            <button class="btn primary" type="submit" id="userSaveBtn">保存账号</button>
+            <button class="btn" type="button" id="userCancelBtn">清空输入</button>
+          </div>
+        </form>
+        <div class="user-toggle-row">
+          <div>
+            <b>开启用户管理</b>
+            <p class="menu-hint">开启后，登录需要「访问码 + 账号密码」两步；关闭后只验证访问码。切换会清空所有登录会话。</p>
+          </div>
+          <span class="toggle-switch" id="userAuthSwitch" role="switch" aria-checked="false"><i></i></span>
+        </div>
+      </div>
     </section>
 
     <!-- 访问码 -->

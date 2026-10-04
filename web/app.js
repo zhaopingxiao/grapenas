@@ -204,6 +204,7 @@ const VIEW_LOADERS = {
   apps: loadApps,
   [APP_VIEW]: loadAppView,
   accesscode: loadAccessCode,
+  usermanage: loadUserManage,
   proxy: loadProxyView,
   security: loadSecurityView,
   personalization: loadPersonalizationView,
@@ -223,6 +224,7 @@ const NAV_OF = {
   proxy: 'settings', // 反向代理属于"选项"
   security: 'settings',
   accesscode: 'settings',
+  usermanage: 'settings',
   storagesettings: 'settings',
   storagelocation: 'settings',
 };
@@ -1012,6 +1014,44 @@ function buildMoveCopyCrumbs() {
 
 // ---------- 访问码 ----------
 
+// ---------- 用户管理（测试阶段：只有一个管理员账号） ----------
+
+async function loadUserManage() {
+  renderCrumbs(document.getElementById('crumbsUsermanage'), [
+    { label: '选项', click: () => switchView('settings') },
+    { label: '安全设置', click: () => switchView('security') },
+    { label: '用户管理', current: true },
+  ]);
+  const hint = document.getElementById('userHint');
+  try {
+    const u = await call('user.get');
+    userInfoCache = u;
+    renderUserManage(u);
+  } catch (err) {
+    hint.textContent = '读取失败：' + err.message;
+  }
+}
+
+let userInfoCache = { enabled: false, hasUser: false, username: null };
+
+function renderUserManage(u) {
+  const hint = document.getElementById('userHint');
+  const sw = document.getElementById('userAuthSwitch');
+  const nameEl = document.getElementById('userName');
+  const saveBtn = document.getElementById('userSaveBtn');
+  if (u.hasUser) {
+    const t = u.createdAt ? ' · 创建于 ' + new Date(u.createdAt).toLocaleString('zh-CN', { hour12: false }) : '';
+    hint.textContent = '当前管理员账号：' + u.username + t + '（测试阶段只支持一个用户）';
+    if (!nameEl.value) nameEl.value = u.username;
+    saveBtn.textContent = '修改账号密码';
+  } else {
+    hint.textContent = '还没有管理员账号。填好账号密码并保存，然后打开下面的开关；开启后登录需要「访问码 + 账号密码」。';
+    saveBtn.textContent = '创建管理员账号';
+  }
+  sw.classList.toggle('on', Boolean(u.enabled));
+  sw.setAttribute('aria-checked', String(Boolean(u.enabled)));
+}
+
 async function loadAccessCode() {
   renderCrumbs(document.getElementById('crumbsAccesscode'), [
     { label: '选项', click: () => switchView('settings') },
@@ -1403,6 +1443,44 @@ function closeModal() {
 // ---------- 事件绑定 ----------
 
 // 侧边栏入口（内置 + 应用）动态渲染，用事件委托
+// 用户管理：保存账号 / 开关
+document.getElementById('userForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('userName').value.trim();
+  const password = document.getElementById('userPass').value;
+  const confirm = document.getElementById('userPass2').value;
+  if (!username) return toast('请输入管理员账号', true);
+  if (password.length < 6) return toast('密码至少 6 位', true);
+  if (password !== confirm) return toast('两次输入的密码不一致', true);
+  try {
+    const u = await call('user.set', { username, password, confirm });
+    document.getElementById('userPass').value = '';
+    document.getElementById('userPass2').value = '';
+    toast('管理员账号已保存：' + u.username);
+    renderUserManage(u);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+document.getElementById('userCancelBtn')?.addEventListener('click', () => {
+  document.getElementById('userPass').value = '';
+  document.getElementById('userPass2').value = '';
+  document.getElementById('userName').value = userInfoCache.username || '';
+});
+document.getElementById('userAuthSwitch')?.addEventListener('click', async () => {
+  const on = !userInfoCache.enabled;
+  if (on && !userInfoCache.hasUser) return toast('请先创建管理员账号', true);
+  if (on && !window.confirm('开启用户管理后，登录需要访问码 + 账号密码，且所有已登录设备会退出。确定开启吗？')) return;
+  try {
+    const r = await call('user.toggle', { enabled: on });
+    toast(on ? '用户管理已开启，请重新登录' : '用户管理已关闭');
+    if (r.revoked) setTimeout(() => location.replace(BASE + '/auth'), 900);
+    else renderUserManage(r);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
 document.getElementById('navList').addEventListener('click', (e) => {
   const btn = e.target.closest('.nav-item');
   if (!btn) return;
