@@ -9,7 +9,6 @@ import {
   setupAccessCode,
   createToken,
   validateToken,
-  revokeAllTokens,
   isValidCodeFormat,
 } from './auth.js';
 import { setupWebSocket, COOKIE_NAME, broadcastEvent, sidebarEntriesFor } from './ws.js';
@@ -283,14 +282,6 @@ async function handleAuth(req, res) {
   sendJson(res, 200, { ok: true, redirect: safeRedirectPath(body.redirect) });
 }
 
-// 撤销访问码授权：清空所有已签发的令牌（所有设备都需要重新输入访问码）
-function handleRevokeAuth(req, res) {
-  const count = revokeAllTokens();
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; Path=${COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=0`);
-  log('info', `访问码授权已撤销（${count} 个已登录会话）`);
-  sendJson(res, 200, { ok: true });
-}
-
 async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   // 路径约定：
@@ -372,10 +363,6 @@ async function handleRequest(req, res) {
     }
     const back = pathname === '/' ? '/' : pathname + url.search;
     return redirect(res, withBase(`/auth?redirect=${encodeURIComponent(back)}`));
-  }
-
-  if (pathname === '/api/auth/revoke' && req.method === 'POST') {
-    return handleRevokeAuth(req, res);
   }
 
   // ---- 应用包接口 ----

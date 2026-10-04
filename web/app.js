@@ -1664,17 +1664,4 @@ document.getElementById('clearLogs').addEventListener('click', async () => {
   }
 });
 
-// 撤销访问码授权：清空所有已签发令牌（所有设备重新输入访问码）
-document.getElementById('revokeAuthBtn').addEventListener('click', () => openModal('modalRevoke'));
-document.getElementById('revokeCancelBtn').addEventListener('click', closeModal);
-document.getElementById('revokeOkBtn').addEventListener('click', async () => {
-  closeModal();
-  try {
-    await fetch(BASE + '/api/auth/revoke', { method: 'POST' });
-    location.replace('/auth');
-  } catch (err) {
-    toast('撤销失败：' + err.message, true);
-  }
-});
-
 connect();
