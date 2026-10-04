@@ -10,12 +10,6 @@ import {
   createToken,
   validateToken,
   isValidCodeFormat,
-  getUserAuthEnabled,
-  userAuthRequired,
-  getUser,
-  verifyPassword,
-  LEVEL_FULL,
-  LEVEL_CODE,
 } from './auth.js';
 import { setupWebSocket, COOKIE_NAME, broadcastEvent, sidebarEntriesFor } from './ws.js';
 import { log } from './logger.js';
@@ -275,31 +269,16 @@ async function handleAuth(req, res) {
   if (!ok) {
     recordFail(ip);
     log('warn', `访问码验证失败 (${ip})`);
-    return sendJson(res, 401, { ok: false, error: '访问码错误', stage: 'code' });
-  }
-
-  // 第二关：用户管理开启后还要校验账号密码（同一个接口分两段，正好复现"验证完访问码验证用户"）
-  const userStep = userAuthRequired();
-  if (userStep) {
-    const username = String(body?.username || '').trim();
-    const password = String(body?.password || '');
-    if (!username || !password) {
-      return sendJson(res, 200, { ok: false, needUser: true, error: null });
-    }
-    if (!verifyPassword(password, getUser()) || username !== (getUser() || {}).username) {
-      recordFail(ip);
-      log('warn', `用户验证失败 (${ip})`);
-      return sendJson(res, 401, { ok: false, needUser: true, error: '账号或密码错误', stage: 'user' });
-    }
+    return sendJson(res, 401, { ok: false, error: '访问码错误' });
   }
 
   attempts.delete(ip);
-  const token = createToken(userStep ? LEVEL_FULL : LEVEL_CODE);
+  const token = createToken();
   res.setHeader(
     'Set-Cookie',
     `${COOKIE_NAME}=${token}; Path=${COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_MAX_AGE}`
   );
-  log('info', settingUp ? `访问码初始化完成 (${ip})` : userStep ? `登录成功（访问码 + 管理员账号）(${ip})` : `登录成功 (${ip})`);
+  log('info', settingUp ? `访问码初始化完成 (${ip})` : `登录成功 (${ip})`);
   sendJson(res, 200, { ok: true, redirect: safeRedirectPath(body.redirect) });
 }
 
@@ -356,16 +335,7 @@ async function handleRequest(req, res) {
     return serveFile(res, path.join(WEB_DIR, pathname.slice(1)));
   }
   if (pathname === '/api/auth/status' && req.method === 'GET') {
-    const u = getUser();
-    return sendJson(res, 200, {
-      ok: true,
-      needSetup: !isAccessCodeSet(),
-      authed: isAuthed(req),
-      // 是否需要在访问码之后再输账号密码（开关开着且已建账号）
-      needUser: userAuthRequired(),
-      userAuthEnabled: getUserAuthEnabled(),
-      hasUser: Boolean(u),
-    });
+    return sendJson(res, 200, { ok: true, needSetup: !isAccessCodeSet(), authed: isAuthed(req) });
   }
   if (pathname === '/api/auth' && req.method === 'POST') {
     return handleAuth(req, res);

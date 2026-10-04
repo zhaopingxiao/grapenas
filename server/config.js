@@ -37,10 +37,6 @@ const config = {
   proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
   apps: [], // 应用: [{ id, name, command, ports: [] }]
   shortcuts: [], // 桌面快捷方式: [{ id, name, lnk }]
-  userAuth: {
-    enabled: false, // 用户管理：开启后除了访问码还要校验账号密码
-    user: null, // 管理员账号: { username, hash, salt, createdAt }
-  },
 };
 
 export function loadConfig() {
@@ -150,38 +146,6 @@ export function removeShortcut(id) {
   list.splice(idx, 1);
   persist();
   return true;
-}
-
-// ---- 用户管理（测试阶段：只有一个管理员账号） ----
-
-function userAuthCfg() {
-  if (!config.userAuth || typeof config.userAuth !== 'object') config.userAuth = {};
-  if (typeof config.userAuth.enabled !== 'boolean') config.userAuth.enabled = false;
-  return config.userAuth;
-}
-
-export function getUserAuthEnabled() {
-  return Boolean(userAuthCfg().enabled);
-}
-
-export function setUserAuthEnabled(on) {
-  userAuthCfg().enabled = Boolean(on);
-  persist();
-  return userAuthCfg().enabled;
-}
-
-export function getUser() {
-  return userAuthCfg().user || null;
-}
-
-export function hasUser() {
-  return Boolean(userAuthCfg().user);
-}
-
-export function saveUser(user) {
-  userAuthCfg().user = user;
-  persist();
-  return user;
 }
 
 export function getThemeMode() {

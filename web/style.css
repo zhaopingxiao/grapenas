@@ -728,36 +728,3 @@ body {
 }
 .toast.show { opacity: 1; }
 .toast.error { background: #4c1d1d; border-color: #f87171; }
-
-/* ==================== 用户管理（登录第二关 + 设置页） ==================== */
-.user-step {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(var(--accent-rgb), 0.2);
-}
-.user-step.hidden { display: none; }
-.user-step .field { display: flex; flex-direction: column; gap: 6px; text-align: left; }
-.user-step .field span { font-size: 12.5px; color: var(--text-muted); }
-.user-step .field input {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 9px;
-  font: inherit;
-  font-size: 14px;
-  background: var(--bg-deep);
-  color: var(--text);
-  border: 1px solid rgba(var(--accent-rgb), 0.3);
-}
-.user-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(var(--accent-rgb), 0.16);
-}
-.user-toggle-row > div { flex: 1 1 auto; }
-.user-toggle-row b { font-size: 14px; }
