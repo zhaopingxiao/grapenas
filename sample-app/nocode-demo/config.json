@@ -1,0 +1,8 @@
+{
+  "id": "nocode-demo",
+  "name": "免访问码示例",
+  "description": "### 这是一个免访问码入口示例\n\n同一份网页挂在两个入口上，用来对比区别：\n\n- `/nocode/nocode-demo/` —— 由 **nocodeport** 提供，**不需要访问码**，换台设备直接打开就能看\n- `/nocode-demo/` —— 由 **port** 提供，走葡萄云的访问码校验\n\n页面里的静态资源（CSS/JS）与接口都走相对路径，所以两个入口都能正常显示。",
+  "icon": "icon.svg",
+  "port": 18991,
+  "nocodeport": 18992
+}

@@ -10,17 +10,30 @@ const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 export const PORT = 9643;
 
 // 葡萄云所有内置路径都挂在这个前缀下：/grapenas/ws、/grapenas/api/...、/grapenas/style.css
-// 只有壳页面本身留在 /（方便直接打开站点根）。应用与手动反向代理也会挂在 /grapenas/<路径> 下，
-// 因此应用 id 不能再叫 grapenas。
+// 只有壳页面本身留在 /（方便直接打开站点根）。应用与手动反向代理挂在根下 /<路径>，
+// 因此应用 id 与代理路径不能再叫 grapenas。
 export const BASE_PATH = '/grapenas';
+
+// 免访问码前缀：应用用 config.json 的 nocodeport 声明的 Web 服务代理到 /nocode/<应用id>，
+// 这一路径下的请求（含 WebSocket）不校验访问码，方便别的设备直接打开。
+export const NOCODE_PREFIX = '/nocode';
+
+export function isNoCodePath(p) {
+  const s = String(p == null ? '' : p);
+  return s === NOCODE_PREFIX || s.startsWith(NOCODE_PREFIX + '/');
+}
 
 // 登录 cookie 的 Path 用站点根：壳页面在 "/"，若把 cookie 限定在 BASE_PATH，
 // 浏览器访问 "/" 时不会带上它，会出现"登录成功 -> 跳 / -> 又弹回登录页"的死循环。
 export const COOKIE_PATH = '/';
 
 // 给站内绝对路径加上前缀：withBase('/api') -> '/grapenas/api'
-// 保留的路径段：应用 id / 手动代理路径不能占用
-export const RESERVED_SEGMENT = 'grapenas';
+// 系统保留的路径段：应用 id / 手动代理路径不能占用（grapenas 是内置前缀，nocode 是免访问码段）
+export const RESERVED_SEGMENTS = ['grapenas', 'nocode'];
+
+export function isReservedSegment(seg) {
+  return RESERVED_SEGMENTS.includes(String(seg == null ? '' : seg).toLowerCase());
+}
 
 export function withBase(p) {
   const s = String(p == null ? '' : p);
@@ -34,8 +47,8 @@ const config = {
   storagePath: null, // 存储位置（我的文件 user/ 与 应用数据 .package/）
   themeMode: 'dark', // 背景模式：dark / light
   themePair: 'purple', // 主题配色对：purple / blue / orange / yellow / mono
-  proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>' }]
-  apps: [], // 应用: [{ id, name, command, ports: [] }]
+  proxies: [], // 反向代理规则: [{ path: '/opencode', port: 4096, app?: '<应用id>', nocode?: true }]
+  apps: [], // 应用: [{ id, name, command, ports: [], nocodeport?: 端口 }]
   shortcuts: [], // 桌面快捷方式: [{ id, name, lnk }]
 };
 

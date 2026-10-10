@@ -1249,6 +1249,17 @@ function openAppSettings(app) {
     ? renderMarkdown(app.description)
     : '<span class="muted-inline">暂无描述</span>';
 
+  // 免访问码入口（应用 config.json 声明了 nocodeport 才有）
+  const nc = document.getElementById('setNocode');
+  const ncLink = document.getElementById('setNocodeLink');
+  if (app.nocode) {
+    ncLink.textContent = app.nocode.url + `（端口 ${app.nocode.port}）`;
+    ncLink.href = app.nocode.url;
+    nc.classList.remove('hidden');
+  } else {
+    nc.classList.add('hidden');
+  }
+
   // 启动/停止按钮按运行状态切换
   const ssBtn = document.getElementById('appStartStopBtn');
   ssBtn.dataset.action = app.running ? 'stop' : 'start';

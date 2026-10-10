@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, isAccessCodeSet, getApp, PORT, BASE_PATH, COOKIE_PATH, withBase, RESERVED_SEGMENT } from './config.js';
+import { loadConfig, isAccessCodeSet, getApp, PORT, BASE_PATH, COOKIE_PATH, withBase, isReservedSegment, isNoCodePath } from './config.js';
 import {
   verifyAccessCode,
   setupAccessCode,
@@ -124,9 +124,9 @@ function resolveAppFile(app, rel) {
   }
 }
 
-// 应用 id 不能占用前缀段本身（否则代理路径会与内置路径冲突）
+// 应用 id 不能占用保留段本身（grapenas / nocode，否则代理路径会与内置或免访问码路径冲突）
 function isReservedAppId(id) {
-  return String(id || '').toLowerCase() === RESERVED_SEGMENT;
+  return isReservedSegment(id);
 }
 
 function appById(id) {
@@ -286,17 +286,21 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   // 路径约定：
   //   内置路径（HTML 之外的接口/静态/WS）都在 /grapenas 前缀下：/grapenas/api/...、/grapenas/style.css、/grapenas/ws
-  //   应用与手动反向代理仍挂在根下：/<应用id>/...
+  //   应用与手动反向代理挂在根下：/<应用id>/...
+  //   应用的免访问码代理挂在 /nocode/<应用id>/...（见 config.json 的 nocodeport）
   //   壳页面在 "/"（/index.html 同义）
   if (url.pathname === '/index.html') {
     return serveFile(res, path.join(WEB_DIR, 'index.html'));
   }
   if (url.pathname === BASE_PATH || url.pathname.startsWith(BASE_PATH + '/')) {
     url.pathname = url.pathname.slice(BASE_PATH.length) || '/';
-  } else {
-    // 没带前缀时：内置路径与静态文件一律拒绝，只有应用/反代路径留在根下
+  } else if (!isNoCodePath(url.pathname)) {
+    // 没带前缀时：内置路径与"根级静态文件"（/style.css、/app.js）一律拒绝，
+    // 只有应用/反代路径留在根下。子路径（/<应用id>/x.css）要放行，否则被代理应用的
+    // 静态资源会全部 404（HTML 绝对路径改写后正是这种形态）。
     const firstSeg = url.pathname.split('/')[1] || '';
-    if (BUILTIN_SEGMENTS.has('/' + firstSeg) || STATIC_EXT_RE.test(url.pathname)) {
+    const rootStatic = /^\/[^/]+$/.test(url.pathname) && STATIC_EXT_RE.test(url.pathname);
+    if (BUILTIN_SEGMENTS.has('/' + firstSeg) || rootStatic) {
       sendText(res, 404, `404 Not Found（内置路径统一在 ${BASE_PATH} 前缀下）`);
       return;
     }
@@ -349,7 +353,9 @@ async function handleRequest(req, res) {
   }
 
   // ---- 其余一律先校验令牌 ----
-  if (!isAuthed(req)) {
+  // 例外：/nocode/<应用id>/... 是应用声明的免访问码入口（config.json 的 nocodeport），
+  // 整段路径直接放行到下面的反代逻辑，不校验访问码。
+  if (!isNoCodePath(pathname) && !isAuthed(req)) {
     if (pathname.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       return sendJson(res, 401, { ok: false, error: '未认证' });
@@ -444,8 +450,9 @@ async function handleRequest(req, res) {
   // 反向代理（HTTP 部分；WebSocket 部分在 upgrade 处理中）
   const rule = findProxyRule(pathname);
   if (rule) {
-    // 命中规则根路径时补尾部斜杠，保证被代理应用的相对路径资源解析正确
-    if (pathname === rule.path) return redirect(res, withBase(rule.path + '/' + (url.search || '')));
+    // 命中规则根路径时补尾部斜杠，保证被代理应用的相对路径资源解析正确。
+    // 应用与代理路径挂在站点根下，这里不能加 /grapenas 前缀（withBase 只用于内置路径）
+    if (pathname === rule.path) return redirect(res, rule.path + '/' + (url.search || ''));
     return proxyHttpRequest(req, res, rule, toTargetPath(rule, pathname, url.search));
   }
 

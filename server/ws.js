@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { validateToken, changeAccessCode } from './auth.js';
-import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, withBase } from './config.js';
+import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, NOCODE_PREFIX, withBase, isNoCodePath, isReservedSegment } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
 import { normalizeProxyPath, isReservedPath, findProxyRule, proxyWsUpgrade } from './proxy.js';
@@ -80,14 +80,17 @@ export function setupWebSocket(server) {
     // 反向代理的 WebSocket（如 /opencode/websocket -> 127.0.0.1:4096/websocket）
     const rule = findProxyRule(pathname);
     if (rule) {
-      const cookies = parseCookies(req.headers.cookie);
-      if (!validateToken(cookies[COOKIE_NAME]) && !wsAuthed(req)) {
-        log('warn', `已拒绝未认证的代理 WebSocket: ${pathname}`);
-        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
-        socket.destroy();
-        return;
+      // /nocode/<应用id>/... 是应用的免访问码入口，WebSocket 同样不校验令牌
+      if (!isNoCodePath(pathname)) {
+        const cookies = parseCookies(req.headers.cookie);
+        if (!validateToken(cookies[COOKIE_NAME]) && !wsAuthed(req)) {
+          log('warn', `已拒绝未认证的代理 WebSocket: ${pathname}`);
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
       }
-      log('info', `WebSocket 隧道: ${pathname} -> 127.0.0.1:${rule.port}`);
+      log('info', `WebSocket 隧道: ${pathname} -> 127.0.0.1:${rule.port}${isNoCodePath(pathname) ? '（免访问码）' : ''}`);
       proxyWsUpgrade(req, socket, head, rule, pathname, url.search);
       return;
     }
@@ -246,6 +249,10 @@ const handlers = {
         running: st.running,
         pid: st.pid,
         webui: appHasWebui(app.id),
+        // 免访问码入口（config.json 的 nocodeport）：前端在应用设置里展示地址
+        nocode: app.nocodeport
+          ? { port: app.nocodeport, url: `${NOCODE_PREFIX}/${app.id}/` }
+          : null,
         // 侧边栏入口：sidebar.json（多入口）优先，其次 config.json 的 sidebar（单入口）
         // 应用没在运行时不下发，前端据此隐藏该应用的所有入口
         sidebar: sidebarEntriesFor(app).map((entry, i) => ({
@@ -468,10 +475,10 @@ function restartServer() {
 }
 
 // 校验应用表单输入
-// 应用 id 不能占用前缀段（grapenas）
+// 应用 id 不能占用保留段（grapenas / nocode）
 function assertAppIdFree(id) {
-  if (String(id || '').toLowerCase() === 'grapenas') {
-    throw new Error('应用 id 不可为 grapenas（与站内路径前缀冲突）');
+  if (isReservedSegment(id)) {
+    throw new Error('应用 id 不可为 grapenas / nocode（与系统保留路径冲突）');
   }
 }
 

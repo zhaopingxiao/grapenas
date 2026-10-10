@@ -15,8 +15,9 @@ export function normalizeProxyPath(p) {
   return path;
 }
 
-// 系统保留路径，不可被代理占用
-const RESERVED = ['/api', '/auth', '/ws', '/grape.svg', '/desktop'];
+// 系统保留路径，不可被手动代理占用
+// （/nocode 是应用的免访问码段，只由应用包 config.json 的 nocodeport 生成规则）
+const RESERVED = ['/api', '/auth', '/ws', '/grape.svg', '/desktop', '/grapenas', '/nocode'];
 
 export function isReservedPath(p) {
   if (p === '/') return true;

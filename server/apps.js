@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getApps, getApp, addApp, removeApp, getProxies, addProxy, removeProxy, PORT, BASE_PATH, RESERVED_SEGMENT } from './config.js';
+import { getApps, getApp, addApp, removeApp, getProxies, addProxy, removeProxy, PORT, BASE_PATH, NOCODE_PREFIX, RESERVED_SEGMENTS, isReservedSegment } from './config.js';
 import { log } from './logger.js';
 import { isReservedPath } from './proxy.js';
 import { packagesDir, isStorageConfigured } from './storage.js';
@@ -13,6 +13,12 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PROGRESS_PATH = path.join(ROOT, '.ground_progress');
 const TMP_DIR = path.join(ROOT, 'data', 'tmp');
 const APP_LOG_DIR = path.join(ROOT, 'data', 'logs');
+
+// 应用实际监听的端口：config.json 的 port（映射到 /<id>）与 nocodeport（映射到 /nocode/<id>）。
+// 用于端口占用守卫、PID 校正与僵尸进程清理（代理映射只认 app.ports，见 syncAppProxyRules）。
+function listenPorts(app) {
+  return [...new Set([...(app?.ports || []), ...(app?.nocodeport ? [app.nocodeport] : [])])];
+}
 
 // 进程是否存活（signal 0 仅探测不发送）
 export function pidAlive(pid) {
@@ -101,8 +107,9 @@ export async function startApp(app) {
   if (status.running) return status;
 
   // 端口占用守卫：端口已被占（疑似遗留实例）时不重复启动，避免撞端口崩溃被误报"意外退出"
-  if (app.ports.length) {
-    const held = app.ports.find((p) => findPidByPort(p) != null);
+  const ports = listenPorts(app);
+  if (ports.length) {
+    const held = ports.find((p) => findPidByPort(p) != null);
     if (held != null) {
       log('warn', `应用 ${app.id} 端口 ${held} 已被占用（疑似已有实例在运行），跳过启动，请先停止该应用`);
       return { running: false, pid: null };
@@ -182,9 +189,9 @@ export async function startApp(app) {
   //   2) 否则沿子进程树找到最底层那个（去掉 shell 包装层）
   const spawnPid = child.pid;
   let realPid = spawnPid;
-  if (app.ports.length) {
-    for (let i = 0; i < 12 && app.ports.length; i++) {
-      const owner = app.ports.map((p) => findPidByPort(p)).find((p) => p != null);
+  if (ports.length) {
+    for (let i = 0; i < 12 && ports.length; i++) {
+      const owner = ports.map((p) => findPidByPort(p)).find((p) => p != null);
       if (owner != null) {
         realPid = owner;
         break;
@@ -276,8 +283,9 @@ export async function stopApp(id) {
     log('info', `应用 ${id} 已停止 (PID ${pid})`);
   }
   // 记录缺失但端口仍被占：按端口找僵尸进程清掉
-  if (app && app.ports.length) {
-    for (const port of app.ports) {
+  const ports = app ? listenPorts(app) : [];
+  if (ports.length) {
+    for (const port of ports) {
       const zPid = findPidByPort(port);
       if (zPid != null && zPid !== pid) {
         if (process.platform === 'win32') {
@@ -311,7 +319,8 @@ export async function ensureAppsRunning() {
   }
 }
 
-// 同步应用的代理规则：第一个端口 -> /<id>，其余 -> /<id>-<port>。
+// 同步应用的代理规则：第一个端口 -> /<id>，其余 -> /<id>-<port>；
+// config.json 里声明了 nocodeport 时，额外生成 /nocode/<id>（该路径不校验访问码）。
 // 应用规则带 app 字段标识，先清后建，不触碰手动添加的规则。
 export function syncAppProxyRules(app) {
   for (const rule of getProxies().filter((r) => r.app === app.id)) {
@@ -330,6 +339,17 @@ export function syncAppProxyRules(app) {
     addProxy({ path: p, port, app: app.id });
     log('info', `应用 ${app.id} 代理: ${p} -> 127.0.0.1:${port}`);
   });
+
+  // 免访问码端口：/nocode/<应用id> -> 127.0.0.1:<nocodeport>
+  if (app.nocodeport) {
+    const p = `${NOCODE_PREFIX}/${app.id}`;
+    if (getProxies().some((r) => r.path === p)) {
+      log('warn', `代理路径 ${p} 已被占用，应用 ${app.id} 的 nocodeport ${app.nocodeport} 跳过映射`);
+      return;
+    }
+    addProxy({ path: p, port: app.nocodeport, app: app.id, nocode: true });
+    log('warn', `应用 ${app.id} 免访问码代理已开启: ${p} -> 127.0.0.1:${app.nocodeport}（该路径无需访问码）`);
+  }
 }
 
 export function removeAppProxyRules(id) {
@@ -344,7 +364,7 @@ export function appHasWebui(id) {
 }
 
 // ========== 应用包（.tar）格式：暂存 / 安装 / 卸载 ==========
-// 包结构：config.json（id/name/description(markdown)/icon/port?）+ 图标 + start/stop 程序
+// 包结构：config.json（id/name/description(markdown)/icon/port?/nocodeport?/sidebar?）+ 图标 + main.js
 
 const ICON_MIME = {
   '.png': 'image/png',
@@ -397,8 +417,8 @@ function validatePackageMeta(meta) {
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) {
     throw new Error('包 config.json 的 id 无效（字母数字及 - _，≤32 字符）');
   }
-  if (id.toLowerCase() === RESERVED_SEGMENT) {
-    throw new Error('应用 id 不可为 grapenas（与站内路径前缀冲突）');
+  if (isReservedSegment(id)) {
+    throw new Error(`应用 id 不可为 ${RESERVED_SEGMENTS.join(' / ')}（与系统保留路径冲突）`);
   }
   if (getApp(id)) throw new Error(`应用 ${id} 已存在`);
   const name = String(meta.name || '').trim() || id;
@@ -418,6 +438,15 @@ function validatePackageMeta(meta) {
     if (isReservedPath('/' + id)) {
       throw new Error(`应用 id「${id}」与系统保留路径冲突（/api、/auth、/ws 等不可作为应用 id）`);
     }
+  }
+  // 免访问码端口：该端口的服务代理到 /nocode/<id>，此路径不校验访问码
+  let nocodeport = null;
+  if (meta.nocodeport != null) {
+    nocodeport = Number(meta.nocodeport);
+    if (!Number.isInteger(nocodeport) || nocodeport < 1 || nocodeport > 65535) {
+      throw new Error('nocodeport 须为 1-65535 的整数');
+    }
+    if (nocodeport === PORT) throw new Error('nocodeport 不可为 NAS 自身端口');
   }
 
   // 可选：侧边栏入口（iconsvg / sidebar_name / page，均为包内相对路径）
@@ -439,7 +468,7 @@ function validatePackageMeta(meta) {
       page: rel(meta.sidebar.page, 'page'),
     };
   }
-  return { id, name, description, icon, port, sidebar };
+  return { id, name, description, icon, port, nocodeport, sidebar };
 }
 
 // 暂存上传的 tar：解出 config.json 与图标用于预览，tar 本体保留供安装
@@ -561,6 +590,8 @@ export async function installStagedTar(token) {
     // 每应用密钥：应用调 /api/reload_sidebar 等接口时用它证明身份
     secret: crypto.randomBytes(16).toString('hex'),
   };
+  // 免访问码端口（可选）：映射到 /nocode/<id>，不需要访问码即可访问
+  if (info.nocodeport) app.nocodeport = info.nocodeport;
   if (info.sidebar) app.sidebar = info.sidebar;
 
   // 侧边栏入口：sidebar.json（多入口）为主，config.json 的 sidebar（单入口）兼容保留

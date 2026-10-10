@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>免访问码示例 · 葡萄云</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="card">
+  <div class="tag">葡萄云示例应用</div>
+  <h1>免访问码页面</h1>
+  <p class="lead">
+    这个页面由示例应用自己的 HTTP 服务提供，葡萄云把它的 <b>nocodeport</b> 代理到了
+    <code>/nocode/nocode-demo/</code> —— <b>这一段路径不校验访问码</b>，换台设备直接打开就能看。
+  </p>
+
+  <div class="panes">
+    <div class="pane public">
+      <h2>不要访问码</h2>
+      <code>/nocode/nocode-demo/</code>
+      <p>当前页面就是从这里打开的（浏览器地址栏可对照）。</p>
+    </div>
+    <div class="pane private">
+      <h2>要访问码</h2>
+      <code>/nocode-demo/</code>
+      <p>同一个应用的 port 入口，未登录会被葡萄云挡回访问码页。</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="callBtn">调用后端接口</button>
+    <span id="status" class="muted">未调用</span>
+  </div>
+  <pre id="out">点上面的按钮，请求会发到相对路径 api/info</pre>
+
+  <p class="foot">
+    页面里的 <code>style.css</code>、<code>app.js</code>、<code>api/info</code> 都是相对路径，
+    所以同一个页面在两个入口下都能正常工作。
+  </p>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
