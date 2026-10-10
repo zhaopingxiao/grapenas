@@ -14,6 +14,8 @@
 - 令牌通道：HTTP 接口接受 Cookie 或 `Authorization: Bearer`；代理 WebSocket 三者都认
   （Cookie / `Authorization: Bearer` / `?token=`）；面板自身 WebSocket（`/grapenas/ws`）只认 Cookie
 - 修改访问码需先验证当前访问码（选项 → 安全设置 → 访问码）
+- **唯一的例外**：应用用 `nocodeport` 声明的 `/nocode/<应用id>/` 故意不校验访问码（见下），
+  只靠"应用是否在运行"控制开合
 
 ### 界面
 
@@ -42,10 +44,13 @@
 - **安装**：把 `.tar` 拖进「添加应用」→ 预览图标 / 名称 / Markdown 描述 → 安装；包上限 50MB
 - **安装完就启动**。磁贴点击行为：未运行 → 启动；运行中且有 WebUI → 新窗口打开 `/<应用id>/`；
   运行中且无 WebUI → 打开应用设置
-- **应用设置**：Markdown 描述 + 启动 / 停止 / 卸载（停进程 → 清代理规则 → 删包目录 → 删日志与登记）
+- **应用设置**：Markdown 描述 + 启动 / 停止 / 卸载（停进程 → 清代理规则 → 删包目录 → 删日志与登记）；
+  声明了 `nocodeport` 的应用还会列出免访问码地址
 - **生命周期**：开机自动启动全部应用；重启后按 PID 记录收养存活进程、不重复启动；
   异常退出写日志并保持停止；输出重定向到 `data/logs/app-<id>.log`；Windows 下无窗口后台运行
 - **多端口**：应用第一个端口映射到 `/<应用id>`，其余端口映射到 `/<应用id>-<端口>`
+- **免访问码入口**：`config.json` 里声明 `nocodeport` 后，这个端口的 Web 服务代理到 `/nocode/<应用id>`，
+  **该路径不校验访问码**（HTTP 与 WebSocket 都能直接访问），换台设备打开就能用；应用一停入口立即失效
 - **桌面快捷方式**（Windows）：应用页可加指向桌面 `.lnk` 的磁贴，点击用 `explorer` 启动，右上角删除
 - **侧边栏入口**：应用包用 `sidebar.json` 声明任意多个入口，运行时可用密钥刷新（见下）
 - **每应用密钥**：安装时随机生成，通过环境变量与包内 `.grapenas.json` 下发给应用
@@ -78,10 +83,11 @@ macOS / Linux 直接 `npm start` 或 `nohup node server/index.js &`。
 |---|---|
 | 壳页面 | `/`（`/index.html` 同义） |
 | 内置接口 / 静态 / WebSocket | `/grapenas/api/...`、`/grapenas/style.css`、`/grapenas/app.js`、`/grapenas/ws`、`/grapenas/auth` |
-| 应用 / 反向代理 | `/<应用id>/...`（不带前缀） |
-| 禁止 | 不带 `/grapenas` 前缀的内置路径与静态文件一律 404 |
+| 应用 / 反向代理 | `/<应用id>/...`（不带前缀，需要访问码） |
+| 应用免访问码入口 | `/nocode/<应用id>/...`（不带前缀，**不校验访问码**，由 `nocodeport` 生成） |
+| 禁止 | 不带 `/grapenas` 前缀的内置路径与根级静态文件（`/style.css`、`/app.js`）一律 404 |
 
-`grapenas` 这一段被系统占用，**应用 id 与代理路径都不能叫 grapenas**。
+`grapenas` 与 `nocode` 这两段被系统占用，**应用 id 与手动代理路径都不能叫它们**。
 
 ## 应用包格式
 
@@ -129,12 +135,18 @@ app.tar
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `id` | 是 | 应用标识（字母数字 `- _`，≤32 字符，不可为 `grapenas`） |
+| `id` | 是 | 应用标识（字母数字 `- _`，≤32 字符，不可为 `grapenas` / `nocode`） |
 | `name` | 否 | 显示名，缺省用 id |
 | `description` | 否 | 描述，支持 Markdown |
 | `icon` | 否 | 图标在包内的相对路径（禁止越界） |
-| `port` | 否 | WebUI 端口；配置后自动反代到 `/<id>` |
+| `port` | 否 | WebUI 端口；配置后自动反代到 `/<id>`，需要访问码 |
+| `nocodeport` | 否 | **免访问码** WebUI 端口；自动反代到 `/nocode/<id>`，该路径不校验访问码 |
 | `sidebar` | 否 | 单入口侧边栏（兼容写法）；多入口请用包根 `sidebar.json`，见下 |
+
+`port` 与 `nocodeport` 可以同时声明（同一个应用两个入口，一个要访问码一个不要），也可以只声明 `nocodeport`。
+两个端口都必须由 `main.js` 自己监听，葡萄云只负责代理。
+
+> 免访问码 = 任何能访问到 9643 端口的人都能打开，别把敏感数据放在这一侧；应用停止后入口立即 404。
 
 ### 应用侧边栏（sidebar.json，可多个入口）
 
@@ -208,9 +220,42 @@ Header: x-grapenas-app-secret: <应用密钥>        # 也支持 ?secret=<密钥
 应用的 WebUI 会自动生成规则：第一个端口 → `/<应用id>`，第 2..n 个端口 → `/<应用id>-<端口>`，
 随应用启动/卸载同步增删，不影响手动规则。
 
+应用还可以用 `config.json` 的 **`nocodeport`** 生成一条**免访问码**规则：
+`/nocode/<应用id>` → `127.0.0.1:<nocodeport>`，HTTP 与 WebSocket 都不校验访问码
+（请求在鉴权门之前直接进入代理）。`/nocode` 是系统保留段，应用 id 与手动代理规则都不能占用。
+
 > 手动规则的界面（旧版的「选项 → 反向代理」页）已在早期版本从菜单移除，
 > 服务端的 `proxy.list` / `proxy.add` / `proxy.remove` 三条 WS 消息仍在；
-> 当前界面上的代理规则都来自应用端口。
+> 当前界面上的代理规则都来自应用端口（含 `nocodeport`）。
+
+## 示例应用
+
+`sample-app/` 里有一个可直接安装的示例，演示 `nocodeport`：
+
+```
+sample-app/
+├── nocode-demo/          # 免访问码入口示例
+│   ├── config.json       # port 18991（要访问码）+ nocodeport 18992（不要）
+│   ├── main.js           # 同一份页面监听两个端口
+│   └── web/              # 页面（资源与接口都用相对路径）
+├── pack.mjs              # 打包成 .tar
+├── dist/                 # 打包输出（.gitignore 已忽略）
+└── README.md
+```
+
+```bash
+node sample-app/pack.mjs        # 生成 sample-app/dist/nocode-demo.tar
+```
+
+把生成的 `.tar` 拖到「应用」页安装（装完自动启动），然后打开：
+
+| 地址 | 需要访问码 |
+|---|---|
+| `/nocode/nocode-demo/` | 否（换台设备、隐私窗口都能直接开） |
+| `/nocode-demo/` | 是 |
+
+详细说明见 [`sample-app/README.md`](sample-app/README.md)，其中也写了写免访问码应用的两个坑：
+资源要用相对路径、`fetch('/x')` 这类绝对路径不会被改写。
 
 ## 内置接口一览
 
@@ -247,6 +292,7 @@ Header: x-grapenas-app-secret: <应用密钥>        # 也支持 ?secret=<密钥
 | GET | `/grapenas/api/files/download?path=` | 令牌 | 下载（一律附件下载） |
 | POST | `/grapenas/api/files/upload?path=&name=` | 令牌 | 上传单个文件（≤200MB） |
 | 任意 | `/<应用id>/...` | 令牌 | 应用 WebUI / 手动代理规则 |
+| 任意 | `/nocode/<应用id>/...` | **公开** | 应用用 `nocodeport` 声明的免访问码入口（含 WebSocket） |
 
 ## 目录结构
 
@@ -270,6 +316,7 @@ grapenas/
 │   ├── grape.svg
 │   └── icons/             # 侧边栏图标
 ├── restart_helper.js      # 网页"重启葡萄云"的独立助手
+├── sample-app/            # 示例应用（nocode-demo + pack.mjs 打包脚本）
 └── package.json           # npm start
 ```
 
@@ -288,7 +335,10 @@ grapenas/
 资源请求不重定向（防缓存污染）、页面与前端资源响应 `no-store`、未认证/未命中响应也显式禁止缓存
 （防旧版本或 401 被浏览器存下来）、
 存储路径与文件路径越界校验、应用包图标与侧边栏路径双重防穿越（词法 + realpath）、
-代理路径与保留段校验、应用 id 不可占用 `grapenas`。
+代理路径与保留段校验、应用 id 不可占用 `grapenas` / `nocode`。
+
+注意：`/nocode/<应用id>/` 是**有意不设防**的（应用自己在 `config.json` 里声明 `nocodeport` 才会生成），
+它绕过访问码与令牌校验，只靠"应用是否在运行"控制开合。敏感数据不要放在这个入口后面。
 
 ## 授权
 
