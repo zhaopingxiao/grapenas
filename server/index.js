@@ -2,6 +2,8 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { Transform } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, isAccessCodeSet, getApp, PORT, BASE_PATH, COOKIE_PATH, withBase, isReservedSegment, isNoCodePath } from './config.js';
 import {
@@ -14,7 +16,7 @@ import {
 import { setupWebSocket, COOKIE_NAME, broadcastEvent, sidebarEntriesFor } from './ws.js';
 import { log } from './logger.js';
 import { parseCookies, readBody, readRawBody, sendJson, redirect, getBearerToken } from './util.js';
-import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule, isReservedPath } from './proxy.js';
+import { findProxyRule, proxyHttpRequest, toTargetPath, findRefererRule } from './proxy.js';
 import { ensureAppsRunning, stageTar, installStagedTar, readAppSidebar } from './apps.js';
 import { resolveStoragePath } from './storage.js';
 
@@ -22,10 +24,22 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WEB_DIR = path.join(ROOT, 'web');
 
 // 未带 /grapenas 前缀时禁止直接访问的内置路径段（应用/反代路径不受影响）
-const BUILTIN_SEGMENTS = new Set(['/api', '/auth', '/ws', '/desktop', '/grape.svg', '/icons']);
+const BUILTIN_SEGMENTS = new Set(['/api', '/auth', '/ws', '/grape.svg', '/icons']);
 // 未带前缀时禁止的静态文件后缀：避免 /style.css、/app.js 这类被静态兜底命中
 const STATIC_EXT_RE = /\.(?:css|js|mjs|map|svg|png|jpe?g|webp|gif|ico|woff2?|json|txt|html?)$/i;
 const TOKEN_MAX_AGE = 7 * 24 * 60 * 60; // 秒
+const UPLOAD_MAX = 200 * 1024 * 1024; // 单文件上传上限
+
+// 文件名非法判定：路径分隔符、上跳、控制字符，
+// 以及 Windows 会特殊对待的保留设备名（CON/NUL/COM1…）与结尾的点/空格。
+function isBadFileName(name) {
+  if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return true;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(name)) return true;
+  if (/[. ]$/.test(name)) return true;
+  const base = name.replace(/\.[^.]*$/, '') || name;
+  return /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(base);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -43,7 +57,7 @@ const MIME = {
 // 简单防爆破：同一 IP 连续失败 5 次锁定 30 秒
 const MAX_FAILS = 5;
 const LOCK_MS = 30 * 1000;
-const attempts = new Map(); // ip -> { fails, lockUntil }
+const attempts = new Map(); // ip -> { fails, lockUntil, lastAt }
 
 function isLocked(ip) {
   const rec = attempts.get(ip);
@@ -51,8 +65,9 @@ function isLocked(ip) {
 }
 
 function recordFail(ip) {
-  const rec = attempts.get(ip) || { fails: 0, lockUntil: 0 };
+  const rec = attempts.get(ip) || { fails: 0, lockUntil: 0, lastAt: 0 };
   rec.fails += 1;
+  rec.lastAt = Date.now();
   if (rec.fails >= MAX_FAILS) {
     rec.lockUntil = Date.now() + LOCK_MS;
     rec.fails = 0;
@@ -60,29 +75,56 @@ function recordFail(ip) {
   attempts.set(ip, rec);
 }
 
+// 定期清理记录表：只靠写入的话，被扫描的源 IP 会一直堆积（无界内存增长）。
+// 锁已过期且 10 分钟没再尝试过的条目直接删掉。
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [ip, rec] of attempts) {
+      if (rec.lockUntil < now && now - rec.lastAt > 10 * 60 * 1000) attempts.delete(ip);
+    }
+  },
+  5 * 60 * 1000
+).unref();
+
 function isAuthed(req) {
   const cookies = parseCookies(req.headers.cookie);
   // cookie 或请求头带令牌均可（请求头供浏览器外的客户端使用）
   return validateToken(cookies[COOKIE_NAME]) || validateToken(getBearerToken(req));
 }
 
-// 防开放重定向：只允许站内相对路径
+// 防开放重定向：只允许站内相对路径。
+// 除了 // 开头，还要挡掉反斜杠：浏览器把 "\" 等同于 "/"，所以 "/\evil.com" 会被
+// 解析成 "//evil.com"（协议相对 URL）跳到外站。控制字符一并拒绝。
 function safeRedirectPath(p) {
-  return typeof p === 'string' && p.startsWith('/') && !p.startsWith('//') ? p : '/';
+  if (typeof p !== 'string' || !p.startsWith('/') || p.startsWith('//')) return '/';
+  // eslint-disable-next-line no-control-regex
+  if (p.includes('\\') || /[\u0000-\u001f]/.test(p)) return '/';
+  return p;
 }
 
 function serveFile(res, filePath) {
   fs.readFile(filePath, (err, data) => {
     if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.writeHead(404, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
       res.end('404 Not Found');
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
-    // 页面与前端资源一律不缓存：避免升级后浏览器仍用旧版 HTML/JS/CSS（引着老路径的资源）
+    const headers = {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'X-Content-Type-Options': 'nosniff', // 不允许浏览器嗅探类型（防把文本当脚本执行）
+    };
+    // 页面与前端资源一律不缓存：避免升级后浏览器仍用旧版 HTML/JS/CSS（引着老路径的资源）；
+    // 图标等其余静态资源走协商缓存即可，别让浏览器无限期沿用旧图。
     if (ext === '.html' || ext === '.js' || ext === '.css' || ext === '.json') {
       headers['Cache-Control'] = 'no-store';
+    } else {
+      headers['Cache-Control'] = 'no-cache';
     }
     res.writeHead(200, headers);
     res.end(data);
@@ -92,13 +134,18 @@ function serveFile(res, filePath) {
 // 未认证/未命中时的文本响应：显式禁止缓存，避免浏览器把 401/404 存下来，
 // 登录成功后仍显示"样式/脚本没了"
 function sendText(res, status, text) {
-  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
   res.end(text);
 }
 
 function resolveStatic(pathname) {
   const filePath = path.normalize(path.join(WEB_DIR, pathname));
-  if (!filePath.startsWith(WEB_DIR)) return null;
+  // 必须按"目录 + 分隔符"比较，否则将来的 web2/ 这类同前缀兄弟目录会漏出去
+  if (filePath !== WEB_DIR && !filePath.startsWith(WEB_DIR + path.sep)) return null;
   try {
     return fs.statSync(filePath).isFile() ? filePath : null;
   } catch {
@@ -246,6 +293,13 @@ function serveAppIcon(res, id) {  const app = /^[A-Za-z0-9_-]{1,32}$/.test(Strin
   serveFile(res, filePath);
 }
 
+// 密钥比较：用定时安全比较（timingSafeEqual 要求等长，长度不同直接判否）
+function secretEquals(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
 async function handleAuth(req, res) {
   const ip = req.socket.remoteAddress;
   if (isLocked(ip)) {
@@ -313,11 +367,18 @@ async function handleRequest(req, res) {
   // 需要该应用的密钥（安装时生成，通过环境变量 GRAPENAS_APP_SECRET 下发）；
   // secret 允许走查询参数，方便应用用最朴素的方式调用。
   if (pathname.startsWith('/api/reload_sidebar/') && req.method === 'POST') {
-    const appId = decodeURIComponent(pathname.slice('/api/reload_sidebar/'.length));
+    let appId;
+    try {
+      appId = decodeURIComponent(pathname.slice('/api/reload_sidebar/'.length));
+    } catch {
+      // 畸形百分号编码不能让整个请求变成 500
+      return sendJson(res, 400, { ok: false, error: '应用 id 编码无效' });
+    }
     const app = appById(appId);
     if (!app) return sendJson(res, 404, { ok: false, error: '应用不存在' });
+    // 密钥走请求头（推荐）或 ?secret= 查询参数（方便应用用最朴素的方式调用），二者都校验
     const provided = String(req.headers['x-grapenas-app-secret'] || url.searchParams.get('secret') || '');
-    if (!app.secret || provided !== app.secret) {
+    if (!app.secret || !secretEquals(provided, app.secret)) {
       log('warn', `应用 ${appId} 刷新侧边栏被拒：密钥无效`);
       return sendJson(res, 401, { ok: false, error: '密钥无效' });
     }
@@ -428,18 +489,58 @@ async function handleRequest(req, res) {
     }
   }
   if (pathname === '/api/files/upload' && req.method === 'POST') {
+    let dir;
     try {
-      const dir = resolveStoragePath(url.searchParams.get('path'));
-      const name = String(url.searchParams.get('name') || '');
-      if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) {
-        throw new Error('文件名非法');
-      }
-      const body = await readRawBody(req, 200 * 1024 * 1024);
-      fs.writeFileSync(path.join(dir, name), body);
-      return sendJson(res, 200, { ok: true });
+      dir = resolveStoragePath(url.searchParams.get('path'));
     } catch (err) {
       return sendJson(res, 400, { ok: false, error: err.message });
     }
+    const name = String(url.searchParams.get('name') || '');
+    if (isBadFileName(name)) return sendJson(res, 400, { ok: false, error: '文件名非法' });
+
+    // 流式落盘：不再把整个文件读进内存（200MB 上限时峰值会吃掉约 400MB）。
+    // 先写 <名字>.grapenas-part，成功后再改名，避免失败时留下半截文件/毁掉原文件。
+    const target = path.join(dir, name);
+    const tmp = `${target}.grapenas-part`;
+    let size = 0;
+    let failed = null;
+    const guard = new Transform({
+      transform(chunk, _enc, cb) {
+        size += chunk.length;
+        if (size > UPLOAD_MAX) {
+          failed = `文件超过 ${UPLOAD_MAX / 1024 / 1024}MB 上限`;
+          cb(new Error(failed));
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+    const out = fs.createWriteStream(tmp);
+    // 注意：这里不能用 stream.pipeline——它出错时会连 req 一起 destroy，
+    // socket 一毁，下面的 4xx 响应就发不出去了（客户端只看到连接被重置）。
+    const settled = new Promise((resolve) => {
+      out.on('finish', () => resolve(null));
+      out.on('error', resolve);
+      guard.on('error', resolve);
+      req.on('error', resolve);
+    });
+    req.pipe(guard).pipe(out);
+    const err = await settled;
+    if (err) {
+      req.unpipe(guard);
+      guard.unpipe(out);
+      out.destroy();
+      req.resume(); // 丢弃剩余上传数据，让错误响应能正常发出
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+      return sendJson(res, 400, { ok: false, error: failed || err.message });
+    }
+    try {
+      await fs.promises.rename(tmp, target);
+    } catch (renameErr) {
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+      return sendJson(res, 400, { ok: false, error: `保存失败: ${renameErr.message}` });
+    }
+    return sendJson(res, 200, { ok: true });
   }
 
   // 所有内置页面共用同一个壳页面 "/"
@@ -449,10 +550,15 @@ async function handleRequest(req, res) {
 
   // 反向代理（HTTP 部分；WebSocket 部分在 upgrade 处理中）
   const rule = findProxyRule(pathname);
+  // 免访问码路径只认应用自己声明的 nocodeport 规则：没有匹配的规则就到此为止。
+  // 绝不能继续往下走静态资源 / Referer 兜底——否则任何未认证的人只要伪造 Referer，
+  // 就能把请求隧道进任意应用端口（等于绕过访问码）。
+  if (isNoCodePath(pathname) && !rule) return sendText(res, 404, '404 Not Found');
   if (rule) {
     // 命中规则根路径时补尾部斜杠，保证被代理应用的相对路径资源解析正确。
+    // 用 308 而不是 302：302 会把 POST/PUT/DELETE 变成 GET 并丢掉请求体。
     // 应用与代理路径挂在站点根下，这里不能加 /grapenas 前缀（withBase 只用于内置路径）
-    if (pathname === rule.path) return redirect(res, rule.path + '/' + (url.search || ''));
+    if (pathname === rule.path) return redirect(res, rule.path + '/' + (url.search || ''), 308);
     return proxyHttpRequest(req, res, rule, toTargetPath(rule, pathname, url.search));
   }
 
@@ -461,14 +567,16 @@ async function handleRequest(req, res) {
   if (staticFile) return serveFile(res, staticFile);
 
   // 绝对路径资源回退：被代理应用以 / 开头引用的资源会请求到根路径，
-  // 按 Referer 判断其所属代理规则
-  const refRule = findRefererRule(req);
+  // 按 Referer 判断其所属代理规则（免访问码路径不走这条，上面那道门已经拦下了）
+  const refRule = isNoCodePath(pathname) ? null : findRefererRule(req);
   if (refRule) return proxyHttpRequest(req, res, refRule, pathname + url.search);
 
   sendText(res, 404, '404 Not Found');
 }
 
-// 进程级兜底：任何异常都不应让服务无声退出
+// 进程级兜底：兜住请求/升级处理之外的意外异常（正常请求路径都有各自的 try/catch）。
+// 这里**只记日志不退出**：本机没有守护进程会把它拉起来，为一个坏请求把整个面板带走
+// 对使用者更糟。但反过来——日志里出现「未捕获异常」就说明有 bug，必须当成 bug 处理。
 process.on('uncaughtException', (err) => log('error', `未捕获异常: ${err.stack || err}`));
 process.on('unhandledRejection', (reason) => log('error', `未处理的 Promise 拒绝: ${reason}`));
 

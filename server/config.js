@@ -53,18 +53,33 @@ const config = {
 };
 
 export function loadConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) return;
+  let raw;
   try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      Object.assign(config, JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')));
-    }
+    // 剥掉 UTF-8 BOM：用记事本「另存为 UTF-8」会带上它，JSON.parse 会直接失败
+    raw = fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
+    Object.assign(config, JSON.parse(raw));
   } catch (err) {
-    console.error('读取配置失败，使用默认配置:', err.message);
+    // 配置损坏时**绝不能用默认配置继续跑**：accessCodeHash 变成 null 会让面板认为
+    // "从未设置过访问码"，于是任何访问者都能设置一个新访问码接管面板，
+    // 同时存储位置与应用登记一并丢失。这里备份后直接退出，等人工修复。
+    const bad = CONFIG_PATH + '.bad';
+    try {
+      fs.copyFileSync(CONFIG_PATH, bad);
+    } catch {
+      /* 备份失败也要退出，不能拿默认配置起服务 */
+    }
+    console.error(`配置损坏（${err.message}），已备份为 ${bad}，请修复后再启动。`);
+    process.exit(1);
   }
 }
 
 function persist() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+  // 原子落盘：先写临时文件再改名，避免断电/崩溃把 config.json 写成半截（读不回来）
+  const tmp = CONFIG_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2));
+  fs.renameSync(tmp, CONFIG_PATH);
 }
 
 export function isAccessCodeSet() {
