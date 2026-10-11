@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { validateToken, changeAccessCode } from './auth.js';
+import { validateToken, changeAccessCode, revokeAllTokens } from './auth.js';
 import { isAccessCodeSet, getProxies, addProxy, removeProxy, getApps, getApp, addApp, updateApp, removeApp, getThemeMode, getThemePair, setTheme, getShortcuts, findShortcut, addShortcut, removeShortcut, PORT, BASE_PATH, NOCODE_PREFIX, withBase, isNoCodePath, isReservedSegment } from './config.js';
 import { log, getLogs, clearLogs, onLog } from './logger.js';
 import { parseCookies } from './util.js';
@@ -57,7 +57,8 @@ export function setupWebSocket(server) {
   const wss = new WebSocketServer({ noServer: true });
   wssRef = wss;
 
-  server.on('upgrade', (req, socket, head) => {
+  // 升级处理单独抽出来，外面统一兜异常（见下）
+  function handleUpgrade(req, socket, head) {
     let url;
     try {
       url = new URL(req.url, 'http://localhost');
@@ -97,6 +98,17 @@ export function setupWebSocket(server) {
 
     log('warn', `已拒绝未知 WebSocket 路径: ${pathname}`);
     socket.destroy();
+  }
+
+  server.on('upgrade', (req, socket, head) => {
+    // 升级阶段抛出的异常必须在这里收尾：否则连接会停在
+    // "101 已经发出、但既未完成鉴权也永不关闭"的中间状态（曾经就是这样漏的）。
+    try {
+      handleUpgrade(req, socket, head);
+    } catch (err) {
+      log('error', `WebSocket 升级处理异常: ${err.message}`);
+      socket.destroy();
+    }
   });
 
   // 新日志实时推送给所有已认证客户端
@@ -131,7 +143,15 @@ export function setupWebSocket(server) {
     ws.on('error', (err) => log('warn', `WebSocket 错误: ${err.message}`));
 
     const cookies = parseCookies(req.headers.cookie);
-    if (!validateToken(cookies[COOKIE_NAME])) {
+    // 鉴权必须自己收尾：连接回调里抛异常会留下一个"既不鉴权也永不关闭"的连接
+    // （ws 库已经把 101 发出去了，这里的 return 只是不注册 message 处理器）
+    let authed = false;
+    try {
+      authed = validateToken(cookies[COOKIE_NAME]);
+    } catch (err) {
+      log('warn', `WebSocket 鉴权异常: ${err.message}`);
+    }
+    if (!authed) {
       log('warn', `WebSocket 令牌无效，已关闭 (${req.socket.remoteAddress})`);
       ws.send(JSON.stringify({ type: 'error', code: 'unauthorized', message: '未认证或令牌已过期' }));
       ws.close(4401, 'unauthorized');
@@ -195,8 +215,21 @@ const handlers = {
     if (!changeAccessCode(data.oldCode, data.newCode)) {
       throw new Error('修改失败：当前访问码错误或新访问码格式不正确（需 8 位数字）');
     }
-    log('info', '访问码已通过设置页修改');
-    return { changed: true };
+    // 改访问码后旧令牌一律作废并踢下线：否则"改码"根本赶不走已经登录的设备。
+    // 延迟一点再关，保证本次的成功回包先发出去（否则用户只看到连接断开）。
+    const revoked = revokeAllTokens();
+    log('info', `访问码已通过设置页修改，${revoked} 个旧令牌已作废，所有设备需用新访问码重新登录`);
+    setTimeout(() => {
+      // 注意：handlers 在 setupWebSocket 之外，这里只能用模块级的 wssRef
+      for (const client of wssRef?.clients || []) {
+        try {
+          client.close(4401, 'access code changed');
+        } catch {
+          /* 已经断开的连接忽略 */
+        }
+      }
+    }, 150);
+    return { changed: true, revoked };
   },
 
   'proxy.list': () => getProxies(),
@@ -245,7 +278,7 @@ const handlers = {
         icon: Boolean(app.icon),
         package: Boolean(app.package),
         command: app.command,
-        ports: app.ports,
+        ports: app.ports || [],
         running: st.running,
         pid: st.pid,
         webui: appHasWebui(app.id),
@@ -380,9 +413,23 @@ const handlers = {
     path: getStoragePath() || null,
   }),
 
-  'storage.set': (data) => ({
-    path: setStoragePath(data.path),
-  }),
+  // 迁移存储位置前先停掉在跑的应用：Windows 下它们占着 .package 里的文件，
+  // 搬一半失败会留下半残状态。迁移结束后（无论成败）再按登记恢复。
+  'storage.set': async (data) => {
+    const running = getApps().filter((app) => checkApp(app).running);
+    for (const app of running) await stopApp(app.id);
+    try {
+      return { path: setStoragePath(data.path) };
+    } finally {
+      for (const app of running) {
+        try {
+          await startApp(getApp(app.id) || app);
+        } catch (err) {
+          log('warn', `存储位置变更后重新启动应用 ${app.id} 失败: ${err.message}`);
+        }
+      }
+    }
+  },
 
   // ---- 文件管理（存储位置内） ----
   'files.list': (data) => {
@@ -510,7 +557,8 @@ function validateAppInput(data) {
 function checkPortConflicts(input, excludeId) {
   for (const other of getApps()) {
     if (other.id === excludeId) continue;
-    for (const p of other.ports) {
+    // 老版本登记的应用可能没有 ports 字段，这里要兜住（否则整个编辑流程会抛 TypeError）
+    for (const p of other.ports || []) {
       if (input.ports.includes(p)) throw new Error(`端口 ${p} 已被应用 ${other.id} 使用`);
     }
   }

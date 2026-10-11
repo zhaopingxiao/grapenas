@@ -91,10 +91,24 @@ export function setStoragePath(p) {
   }
 
   if (oldPath && fs.existsSync(oldPath)) {
-    // 重新设置：把当前存储位置的数据剪切到新位置
+    // 重新设置：把当前存储位置的数据剪切到新位置。
+    // 逐条记录已搬走的条目，中途失败就回滚，避免留下"文件搬了一半、配置还指旧路径"的半残状态。
     ensureLayout(newPath);
-    for (const entry of fs.readdirSync(oldPath)) {
-      moveEntry(path.join(oldPath, entry), path.join(newPath, entry));
+    const moved = [];
+    try {
+      for (const entry of fs.readdirSync(oldPath)) {
+        moveEntry(path.join(oldPath, entry), path.join(newPath, entry));
+        moved.push(entry);
+      }
+    } catch (err) {
+      for (const entry of moved.reverse()) {
+        try {
+          moveEntry(path.join(newPath, entry), path.join(oldPath, entry));
+        } catch (rollbackErr) {
+          log('error', `存储迁移回滚失败（${entry}）: ${rollbackErr.message}`);
+        }
+      }
+      throw new Error(`迁移失败，已回滚到原位置：${err.message}`);
     }
     migrateAppPaths(path.join(oldPath, '.package'), path.join(newPath, '.package'));
     log('info', `存储位置已迁移: ${oldPath} -> ${newPath}`);

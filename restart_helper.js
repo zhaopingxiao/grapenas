@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { processCommandLine, pidBelongsToApp } from './server/apps.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 9643;
@@ -21,6 +22,43 @@ function note(msg) {
     fs.appendFileSync(LOG, `[${new Date().toLocaleString()}] INFO  ${msg}\n`);
   } catch {
     /* 忽略 */
+  }
+}
+
+// 进程是不是葡萄云服务本身（PID 会被系统回收复用，杀之前必须核对命令行）
+// 返回 null 表示判断不了（取不到命令行），此时沿用老行为，避免"关不掉旧实例"卡住重启。
+function looksLikeServer(pid) {
+  const line = processCommandLine(pid);
+  if (!line) return null;
+  return /server[\\/]index\.js/i.test(line);
+}
+
+// 直接读配置里的应用登记（不用 server/config.js 的 loadConfig：配置损坏时它会 process.exit）
+function loadAppsForVerify() {
+  try {
+    const raw = fs.readFileSync(path.join(ROOT, 'data', 'config.json'), 'utf8').replace(/^\uFEFF/, '');
+    const cfg = JSON.parse(raw);
+    return Array.isArray(cfg.apps) ? cfg.apps : [];
+  } catch {
+    return null; // 读不出来就不做归属校验
+  }
+}
+
+// 杀进程树（Windows 用 taskkill /T /F；Unix 杀进程组），带 error 监听
+function killTree(pid) {
+  if (process.platform === 'win32') {
+    const child = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => note(`taskkill 失败 (PID ${pid}): ${err.message}`));
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      /* 已退出 */
+    }
   }
 }
 
@@ -51,7 +89,13 @@ function run(cmd, args) {
 
 async function findServerPid() {
   if (!(await portOpen())) return null;
-  if (Number.isInteger(pidArg)) return pidArg;
+  if (Number.isInteger(pidArg)) {
+    // 只在"能确认是服务进程"或"判断不了"时使用传入的 PID；
+    // 若明确判断出它不是服务进程（PID 已被系统回收复用），改为按端口查找
+    const ok = looksLikeServer(pidArg);
+    if (ok !== false) return pidArg;
+    note(`传入的 PID ${pidArg} 命令行不像 server/index.js（疑似已被回收复用），改为按端口查找`);
+  }
   try {
     if (process.platform === 'win32') {
       const out = await run('netstat', ['-ano']);
@@ -84,9 +128,11 @@ async function findServerPid() {
 }
 
 // 只终止服务进程本身（Windows：taskkill /F；Unix：进程组 TERM）
+// 这里刻意不加 /T：助手是被服务进程拉起的子进程，/T 会把助手自己一起杀掉
 function killServer(pid) {
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(pid), '/F'], { stdio: 'ignore', windowsHide: true });
+    const child = spawn('taskkill', ['/pid', String(pid), '/F'], { stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => note(`taskkill 服务进程失败 (PID ${pid}): ${err.message}`));
   } else {
     try {
       process.kill(-pid, 'SIGTERM');
@@ -109,21 +155,17 @@ function killAllApps() {
   } catch {
     return;
   }
+  const apps = loadAppsForVerify();
   for (const [id, pid] of Object.entries(progress)) {
     if (pid == null) continue;
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    } else {
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        try {
-          process.kill(pid, 'SIGTERM');
-        } catch {
-          /* 已退出 */
-        }
-      }
+    // PID 会被系统回收复用：能确认这个进程不属于该应用时绝不盲杀
+    // （历史上就这样误杀过一次用户正在后台跑的 gnconnect 隧道）
+    const app = apps ? apps.find((a) => a.id === id) : null;
+    if (app && pidBelongsToApp(pid, app) === false) {
+      note(`跳过应用 ${id} 的 PID ${pid}：命令行与它不匹配，疑似 PID 已被回收复用`);
+      continue;
     }
+    killTree(pid);
     note(`重启关闭应用 ${id} (PID ${pid})`);
   }
   fs.writeFileSync(path.join(ROOT, '.ground_progress'), '{}');

@@ -52,6 +52,14 @@ export function validateToken(token) {
   return true;
 }
 
+// 吊销所有已签发的令牌，返回被吊销的数量。
+// 修改访问码后必须调用：否则改码根本踢不掉已经登录的设备（旧令牌还在 7 天有效期内）。
+export function revokeAllTokens() {
+  const count = tokens.size;
+  tokens.clear();
+  return count;
+}
+
 // 定期清理过期令牌
 setInterval(() => {
   const now = Date.now();

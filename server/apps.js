@@ -14,6 +14,29 @@ const PROGRESS_PATH = path.join(ROOT, '.ground_progress');
 const TMP_DIR = path.join(ROOT, 'data', 'tmp');
 const APP_LOG_DIR = path.join(ROOT, 'data', 'logs');
 
+// 暂存 tar 的保留时长：上传了却一直没点"安装"的包，超过这个时间自动清掉，避免一直占盘
+const TMP_TTL_MS = 2 * 60 * 60 * 1000;
+
+function pruneTmp(now = Date.now()) {
+  let names;
+  try {
+    names = fs.readdirSync(TMP_DIR);
+  } catch {
+    return; // 目录还不存在
+  }
+  for (const name of names) {
+    const p = path.join(TMP_DIR, name);
+    try {
+      if (now - fs.statSync(p).mtimeMs > TMP_TTL_MS) {
+        fs.rmSync(p, { recursive: true, force: true });
+        log('info', `已清理过期的应用包暂存: ${name}`);
+      }
+    } catch {
+      /* 单个条目失败不影响其它 */
+    }
+  }
+}
+
 // 应用实际监听的端口：config.json 的 port（映射到 /<id>）与 nocodeport（映射到 /nocode/<id>）。
 // 用于端口占用守卫、PID 校正与僵尸进程清理（代理映射只认 app.ports，见 syncAppProxyRules）。
 function listenPorts(app) {
@@ -66,6 +89,57 @@ function deepestChildPid(pid, depth = 0) {
   if (!kids.length) return pid;
   // 只跟踪第一个子进程（应用通常是一条链：cmd -> node）
   return deepestChildPid(kids[0], depth + 1);
+}
+
+// 取某进程的命令行（Windows 用 CIM，Unix 用 ps）；取不到返回 null
+export function processCommandLine(pid) {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync(
+        'powershell',
+        ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`],
+        { encoding: 'utf8', windowsHide: true, timeout: 8000 }
+      );
+      return out.trim() || null;
+    }
+    const out = execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// 判断某个 PID 是否真属于这个应用：命令行里必须出现应用的脚本/包目录/命令。
+// PID 是会被系统回收复用的，.ground_progress 里的记录可能指向一个完全无关的进程——
+// 盲杀就是那次误杀 gnconnect 隧道的根因。
+// 返回值：true 确认属于本应用；false 确认不属于（不要杀）；
+//         null 判断不了（取不到命令行，或这个应用没有任何可比对的路径信息）
+export function pidBelongsToApp(pid, app) {
+  const line = (processCommandLine(pid) || '').toLowerCase();
+  if (!line) return null;
+  const candidates = [];
+  if (app?.script) candidates.push(path.normalize(app.script));
+  if (app?.dir) candidates.push(path.normalize(app.dir));
+  if (app?.command) {
+    const first = String(app.command).trim().split(/\s+/)[0].replace(/^"|"$/g, '');
+    if (first) candidates.push(path.normalize(first));
+  }
+  // 应用 id 通常也出现在包路径里（如 ...\.package\gnconnect\main.js），
+  // 作为兜底候选；太短的 id 会误匹配，所以只取 4 个字符以上的
+  if (typeof app?.id === 'string' && app.id.length >= 4) candidates.push(app.id);
+  if (!candidates.length) return null;
+  return candidates.some((c) => c && line.includes(c.toLowerCase()));
+}
+
+// 终止进程（Windows 用 taskkill /T /F 连子进程一起收；Unix 杀进程组）
+// taskkill 是 detached 的，必须挂 error 监听，否则 spawn 失败会变成未捕获异常
+function killTree(pid) {
+  if (process.platform === 'win32') {
+    const child = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    child.on('error', (err) => log('error', `taskkill 失败 (PID ${pid}): ${err.message}`));
+    return;
+  }
+  killProcessGroup(pid);
 }
 
 function loadProgress() {
@@ -270,31 +344,36 @@ export async function stopApp(id) {
   const progress = loadProgress();
   const pid = progress[id];
   if (pid != null && pidAlive(pid)) {
-    if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    // 杀之前先确认这个 PID 真的属于本应用：PID 会被系统回收复用，
+    // 记录里的 PID 可能已经指向一个无关进程（历史上就这样误杀过一次）。
+    const owns = pidBelongsToApp(pid, app);
+    if (owns === false) {
+      log(
+        'warn',
+        `应用 ${id} 记录的 PID ${pid} 命令行与它不匹配（疑似已被系统回收复用），跳过终止，仅清除记录`
+      );
     } else {
-      killProcessGroup(pid);
+      killTree(pid);
+      // 等待进程真正退出（最多 5 秒），避免后续操作（如删包目录）撞到文件占用
+      const deadline = Date.now() + 5000;
+      while (pidAlive(pid) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      log('info', `应用 ${id} 已停止 (PID ${pid})`);
     }
-    // 等待进程真正退出（最多 5 秒），避免后续操作（如删包目录）撞到文件占用
-    const deadline = Date.now() + 5000;
-    while (pidAlive(pid) && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    log('info', `应用 ${id} 已停止 (PID ${pid})`);
   }
-  // 记录缺失但端口仍被占：按端口找僵尸进程清掉
+  // 记录缺失但端口仍被占：按端口找僵尸进程清掉（同样先确认归属）
   const ports = app ? listenPorts(app) : [];
   if (ports.length) {
     for (const port of ports) {
       const zPid = findPidByPort(port);
-      if (zPid != null && zPid !== pid) {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(zPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-        } else {
-          killProcessGroup(zPid);
-        }
-        log('info', `应用 ${id} 端口 ${port} 的僵尸进程 (PID ${zPid}) 已清理`);
+      if (zPid == null || zPid === pid) continue;
+      if (app && pidBelongsToApp(zPid, app) === false) {
+        log('warn', `端口 ${port} 被 PID ${zPid} 占用，但命令行与应用 ${id} 不匹配，跳过终止`);
+        continue;
       }
+      killTree(zPid);
+      log('info', `应用 ${id} 端口 ${port} 的僵尸进程 (PID ${zPid}) 已清理`);
     }
   }
   if (progress[id] != null) {
@@ -306,6 +385,7 @@ export async function stopApp(id) {
 
 // 服务启动时：按核对逻辑启动所有应用（已存活的跳过，不重复启动）
 export async function ensureAppsRunning() {
+  pruneTmp(); // 启动时也清一次过期的暂存包
   if (!isStorageConfigured()) {
     log('warn', '尚未配置存储位置，跳过应用启动');
     return;
@@ -420,6 +500,11 @@ function validatePackageMeta(meta) {
   if (isReservedSegment(id)) {
     throw new Error(`应用 id 不可为 ${RESERVED_SEGMENTS.join(' / ')}（与系统保留路径冲突）`);
   }
+  // 内置路径段（/api、/auth、/ws、/icons…）也不能当应用 id：这与有没有声明端口无关，
+  // 以前这个校验被写在 `if (meta.port != null)` 里面，不声明端口的包就漏过去了。
+  if (isReservedPath('/' + id)) {
+    throw new Error(`应用 id「${id}」与系统保留路径冲突（/api、/auth、/ws 等不可作为应用 id）`);
+  }
   if (getApp(id)) throw new Error(`应用 ${id} 已存在`);
   const name = String(meta.name || '').trim() || id;
   const description = typeof meta.description === 'string' ? meta.description : '';
@@ -435,9 +520,6 @@ function validatePackageMeta(meta) {
     port = Number(meta.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('webui 端口须为 1-65535 的整数');
     if (port === PORT) throw new Error('webui 端口不可为 NAS 自身端口');
-    if (isReservedPath('/' + id)) {
-      throw new Error(`应用 id「${id}」与系统保留路径冲突（/api、/auth、/ws 等不可作为应用 id）`);
-    }
   }
   // 免访问码端口：该端口的服务代理到 /nocode/<id>，此路径不校验访问码
   let nocodeport = null;
@@ -474,6 +556,7 @@ function validatePackageMeta(meta) {
 // 暂存上传的 tar：解出 config.json 与图标用于预览，tar 本体保留供安装
 export async function stageTar(buffer) {
   await fs.promises.mkdir(TMP_DIR, { recursive: true });
+  pruneTmp(); // 顺手清理过期的暂存包
   const token = crypto.randomBytes(12).toString('hex');
   const tarPath = path.join(TMP_DIR, `${token}.tar`);
   await fs.promises.writeFile(tarPath, buffer);
@@ -615,8 +698,6 @@ export async function installStagedTar(token) {
   return app;
 }
 
-// 卸载应用：停掉 main.js（连同子进程）→ 清代理 → 删包目录 → 删配置
-// 不再有 stop.js：需要收尾就在 main.js 里监听 SIGTERM
 // 读取应用包里的 sidebar.json（侧边栏入口声明，可选）。
 // 格式：[{ "iconsvg": "icon.svg", "sidebar_name": "名字", "page": "web/x.html" }, ...]
 // 返回 null 表示包里没有这个文件；返回 [] 表示有文件但没有任何有效入口。
@@ -665,37 +746,29 @@ export function runtimeInfoFile(app) {
   return app && app.dir ? path.join(app.dir, '.grapenas.json') : null;
 }
 
+// 卸载应用：停掉 main.js（连同子进程）→ 清代理 → 删包目录 → 删日志与登记
+// 不再有 stop.js：需要收尾就在 main.js 里监听 SIGTERM
 export async function uninstallApp(app) {
   stoppingApps.add(app.id); // 卸载全程视为主动停止
   await stopApp(app.id);
   removeAppProxyRules(app.id);
   if (app.package && app.dir) {
-    try {
-      await fs.promises.rm(app.dir, { recursive: true, force: true });
-      log('info', `应用 ${app.id} 包文件已删除`);
-    } catch (err) {
-      log('warn', `删除包目录失败: ${err.message}`);
+    // 删目录前必须确认它就在 <存储位置>/.package 内：配置被改坏/迁移写错时，
+    // 一个 rm -rf 就可能删掉完全无关的目录。
+    const root = packagesDir();
+    const dir = path.normalize(app.dir);
+    if (!root || !dir.startsWith(path.normalize(root) + path.sep)) {
+      log('warn', `应用 ${app.id} 的包目录不在存储位置的 .package 内（${app.dir}），为安全起见不删除`);
+    } else {
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+        log('info', `应用 ${app.id} 包文件已删除`);
+      } catch (err) {
+        log('warn', `删除包目录失败: ${err.message}`);
+      }
     }
   }
   // 清理应用运行日志
   await fs.promises.rm(path.join(APP_LOG_DIR, `app-${app.id}.log`), { force: true }).catch(() => {});
   removeApp(app.id);
-}
-
-function runProgram(cmd, cwd, timeoutMs = 15000) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, { shell: true, cwd, stdio: 'ignore' });
-    const timer = setTimeout(() => {
-      p.kill();
-      reject(new Error('执行超时'));
-    }, timeoutMs);
-    p.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    p.on('close', (code) => {
-      clearTimeout(timer);
-      resolve(code);
-    });
-  });
 }
