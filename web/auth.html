@@ -116,7 +116,14 @@
 
 <script>
   const params = new URLSearchParams(location.search);
-  const redirectTo = params.get('redirect') || '/';
+  // 与服务端 safeRedirectPath() 一致的白名单校验：只允许站内相对路径，防开放重定向
+  function safeRedirectPath(p) {
+    if (typeof p !== 'string' || !p.startsWith('/') || p.startsWith('//')) return '/';
+    // 浏览器把 "\" 等同于 "/"，所以 "/\evil.com" 会被解析成协议相对 URL；控制字符一并拒绝
+    if (p.includes('\\') || /[\u0000-\u001f]/.test(p)) return '/';
+    return p;
+  }
+  const redirectTo = safeRedirectPath(params.get('redirect') || '/');
   let needSetup = false;
 
   const cardEl = document.getElementById('card');

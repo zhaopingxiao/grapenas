@@ -14,6 +14,27 @@ const pending = new Map();
 const HANDSHAKE_TIMEOUT = 5000; // 握手超时：避免永远卡在 CONNECTING
 const HEARTBEAT_INTERVAL = 25000; // 心跳间隔
 const HEARTBEAT_SILENCE = 50000; // 超过该时长无任何消息往来则判定假死
+const CALL_TIMEOUT = 15000; // 单次请求超时：回包丢失时不能让 await 永久挂起
+
+let reconnectTimer = null; // 兜底重连定时器（保证同一时刻只排一次重连）
+
+// 连接断开：结算所有未回包的请求，它们的 promise 不会再有结果
+function rejectPending(reason) {
+  for (const p of pending.values()) {
+    clearTimeout(p.timer);
+    p.reject(new Error(reason));
+  }
+  pending.clear();
+}
+
+// 幂等重连调度：onclose / onerror / 握手超时都走这里，重复调用只排一次
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, 2000);
+}
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -24,7 +45,10 @@ function connect() {
   // 握手超时保护：设备休眠唤醒、僵尸连接占满浏览器连接数等场景下
   // onopen/onclose 都可能不触发，主动关闭以进入重连循环
   const handshakeTimer = setTimeout(() => {
-    if (ws.readyState === WebSocket.CONNECTING) ws.close();
+    if (ws.readyState === WebSocket.CONNECTING) {
+      ws.close();
+      scheduleReconnect(); // 某些场景 close 不触发 onclose，这里兜底安排重连
+    }
   }, HANDSHAKE_TIMEOUT);
 
   // 客户端心跳：服务端长时间无响应说明连接假死（TCP 不会发 FIN），主动断开重连
@@ -39,6 +63,11 @@ function connect() {
 
   ws.onopen = () => {
     clearTimeout(handshakeTimer);
+    if (reconnectTimer) {
+      // 连接已成功，取消待执行的兜底重连
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     lastMsgAt = Date.now();
     state.connected = true;
     updateConnStatus();
@@ -60,22 +89,38 @@ function connect() {
     if (msg.id !== undefined && pending.has(msg.id)) {
       const p = pending.get(msg.id);
       pending.delete(msg.id);
+      clearTimeout(p.timer); // 正常回包，撤掉超时定时器
       if (msg.ok) p.resolve(msg.data);
       else p.reject(new Error(msg.error));
     }
   };
 
+  // 连接的收尾：只对当前 socket 生效，避免被新连接取代后误清全局状态
+  const teardown = () => {
+    if (state.ws !== ws) return false;
+    state.ws = null;
+    state.connected = false;
+    updateConnStatus();
+    // 断开后未回包的请求不会再有结果，先结算避免调用方永久等待
+    rejectPending('连接已断开');
+    return true;
+  };
+
   ws.onclose = (e) => {
     clearTimeout(handshakeTimer);
     clearInterval(heartbeatTimer);
-    state.connected = false;
-    updateConnStatus();
+    const current = teardown();
     if (e.code === 4401) {
-      // 令牌失效，回到访问码页面
+      // 令牌失效，回到访问码页面（pending 已在上面的 teardown 中结算）
       location.replace(BASE + '/auth?redirect=' + encodeURIComponent('/'));
       return;
     }
-    setTimeout(connect, 2000); // 自动重连
+    if (current) scheduleReconnect(); // 自动重连（旧 socket 的延迟 close 不再重复排队）
+  };
+
+  // 连接出错：onerror 之后不一定有 onclose，这里同样结算未回包的请求并兜底重连
+  ws.onerror = () => {
+    if (teardown()) scheduleReconnect();
   };
 }
 
@@ -85,7 +130,11 @@ function call(type, data) {
       return reject(new Error('连接尚未建立'));
     }
     const id = ++reqId;
-    pending.set(id, { resolve, reject });
+    // 超时兜底：连接没断但对端不回包时，不能让调用方永久挂起
+    const timer = setTimeout(() => {
+      if (pending.delete(id)) reject(new Error('请求超时'));
+    }, CALL_TIMEOUT);
+    pending.set(id, { resolve, reject, timer });
     state.ws.send(JSON.stringify({ id, type, data }));
   });
 }
@@ -117,10 +166,10 @@ const BUILTIN_NAV = [
 ];
 
 const APP_VIEW = 'appview'; // 应用侧边栏页面片段共用的视图容器
-const appRuntimes = new Map();
 let appsList = [];
 let activeAppId = null;
 let activeAppEntry = 0; // 当前打开的是该应用的第几个侧边栏入口（sidebar.json 的小标）
+let appViewToken = 0; // 片段加载令牌：并发加载时只有最新一次允许写 DOM
 
 // 暴露给应用片段（片段注入模式下与壳页面共用同一个 document）
 window.GrapenasHost = {
@@ -204,7 +253,6 @@ const VIEW_LOADERS = {
   apps: loadApps,
   [APP_VIEW]: loadAppView,
   accesscode: loadAccessCode,
-  proxy: loadProxyView,
   security: loadSecurityView,
   personalization: loadPersonalizationView,
   themecolor: loadThemeColorView,
@@ -220,7 +268,6 @@ const NAV_OF = {
   settings: 'settings',
   personalization: 'settings',
   themecolor: 'settings',
-  proxy: 'settings', // 反向代理属于"选项"
   security: 'settings',
   accesscode: 'settings',
   storagesettings: 'settings',
@@ -228,14 +275,22 @@ const NAV_OF = {
 };
 
 function switchView(view, options = {}) {
-  // 离开应用视图：卸载片段（断开连接、清定时器与全局事件）
-  if (state.view === APP_VIEW && view !== APP_VIEW) unmountAppView();
+  // 离开应用视图、切到另一个应用/入口或强制重载时，都要先卸载旧片段
+  // （判断必须在下面给 activeAppId 赋值之前完成）
+  if (
+    state.view === APP_VIEW &&
+    (view !== APP_VIEW ||
+      options.app !== activeAppId ||
+      Number(options.entry || 0) !== activeAppEntry ||
+      options.force)
+  ) {
+    unmountAppView();
+  }
   state.view = view;
   if (view === APP_VIEW && options.app) {
     activeAppId = options.app;
     activeAppEntry = Number(options.entry || 0);
   }
-  if (options.force) appRuntimes.delete(activeAppId);
   document.querySelectorAll('.view').forEach((v) => v.classList.add('hidden'));
   const section = document.getElementById('view-' + view);
   if (section) section.classList.remove('hidden');
@@ -269,7 +324,7 @@ function renderSysInfo(info) {
   const cards = [
     ['主机名', info.hostname],
     ['系统', `${info.platform} ${info.release} (${info.arch})`],
-    ['CPU', `${escapeHtml(info.cpuModel)} × ${info.cpuCores}`],
+    ['CPU', `${info.cpuModel} × ${info.cpuCores}`],
     ['内存', `${formatBytes(usedMem)} / ${formatBytes(info.totalMem)}（${memPct}%）`],
     ['系统运行时间', formatUptime(info.osUptime)],
     ['服务运行时间', formatUptime(info.serverUptime)],
@@ -277,7 +332,7 @@ function renderSysInfo(info) {
     ['服务器时间', new Date(info.serverTime).toLocaleString()],
   ];
   document.getElementById('sysCards').innerHTML = cards
-    .map(([label, value]) => `<div class="card"><div class="card-label">${label}</div><div class="card-value">${value}</div></div>`)
+    .map(([label, value]) => `<div class="card"><div class="card-label">${label}</div><div class="card-value">${escapeHtml(String(value))}</div></div>`)
     .join('');
 }
 
@@ -289,6 +344,8 @@ function appendLog(entry) {
   div.innerHTML = `<span class="log-time">${time}</span><span class="log-level ${entry.level}">${entry.level.toUpperCase()}</span><span class="log-msg"></span>`;
   div.querySelector('.log-msg').textContent = entry.message;
   list.appendChild(div);
+  // 与服务端日志环形缓冲上限（500 条）保持一致，避免实时日志一直追加导致无界增长
+  while (list.children.length > 500) list.firstElementChild.remove();
   list.scrollTop = list.scrollHeight;
 }
 
@@ -645,6 +702,9 @@ async function loadAppView() {
   if (!activeAppId) return;
   const app = appsList.find((a) => a.id === activeAppId);
   const appId = activeAppId;
+  const token = ++appViewToken; // 本次加载的令牌，切走后即失效
+  // 本次加载是否仍是最新且仍在当前应用视图（并发加载/切走后不许再写 DOM）
+  const isCurrent = () => token === appViewToken && state.view === APP_VIEW && activeAppId === appId;
   const entries = (app && app.sidebar) || [];
   const entry = entries.find((e) => Number(e.index) === activeAppEntry) || entries[0];
   renderCrumbs(document.getElementById('appViewCrumbs'), [
@@ -659,9 +719,11 @@ async function loadAppView() {
       { credentials: 'same-origin' }
     );
     if (!res.ok) throw new Error('应用页面加载失败（HTTP ' + res.status + '）');
-    await mountAppFragment(host, await res.text(), appId, entry.index);
-    appRuntimes.set(appId, { api: window.GrapenasModule });
+    const html = await res.text();
+    if (!isCurrent()) return; // 加载期间已切走/切到别的应用：丢弃片段，不写 DOM
+    await mountAppFragment(host, html, appId, entry.index);
   } catch (err) {
+    if (!isCurrent()) return; // 过期的失败结果不覆盖当前视图
     host.innerHTML = '';
     const p = document.createElement('p');
     p.className = 'muted';
@@ -697,6 +759,7 @@ async function mountAppFragment(host, html, appId, entryIndex = 0) {
     }
   }
   // 应用片段可注册 window.GrapenasModule = { mount(root), unmount() }（可选）
+  window.GrapenasModule = undefined; // 先清掉上一个应用残留的模块，避免 mount 到新应用容器上
   const api = window.GrapenasModule;
   if (api && typeof api.mount === 'function') api.mount(rootEl);
 }
@@ -708,12 +771,12 @@ function unmountAppView() {
   } catch {
     /* 片段卸载异常不应影响切换 */
   }
-  appRuntimes.delete(activeAppId);
   document.querySelectorAll('script[data-app-script]').forEach((s) => s.remove());
   document.querySelectorAll('[data-app-style]').forEach((n) => n.remove());
   const host = document.getElementById('appViewHost');
   if (host) host.innerHTML = '';
   window.GrapenasModule = undefined;
+  appViewToken++; // 让仍在进行的片段加载失效
 }
 
 async function submitStoragePath(inputId, errorId) {
@@ -764,10 +827,10 @@ function makeFilesEntry(rel, label) {
   arrow.className = 'menu-arrow';
   arrow.textContent = '›';
   li.append(span, arrow);
-  li.addEventListener('click', () => {
+  onActivate(li, () => {
     filesPath = rel;
     loadFilesView();
-  });
+  }, label);
   return li;
 }
 
@@ -911,10 +974,10 @@ function renderFilesBrowser(content, entries) {
     actions.appendChild(del);
     row.append(icon, name, meta, actions);
     if (e.dir) {
-      row.addEventListener('click', () => {
+      onActivate(row, () => {
         filesPath = filesRel(e.name);
         loadFilesView();
-      });
+      }, e.name);
     }
     list.appendChild(row);
   }
@@ -966,10 +1029,10 @@ async function loadMoveCopyDirs() {
       name.className = 'file-name';
       name.textContent = e.name;
       row.append(icon, name);
-      row.addEventListener('click', () => {
+      onActivate(row, () => {
         mcPath = mcPath ? mcPath + '/' + e.name : e.name;
         loadMoveCopyDirs();
-      });
+      }, e.name);
       list.appendChild(row);
     }
   } catch (err) {
@@ -987,10 +1050,10 @@ function makeMoveCopyEntry(rel, label) {
   name.className = 'file-name';
   name.textContent = label;
   row.append(icon, name);
-  row.addEventListener('click', () => {
+  onActivate(row, () => {
     mcPath = rel;
     loadMoveCopyDirs();
-  });
+  }, label);
   return row;
 }
 
@@ -1044,23 +1107,13 @@ async function loadApps() {
   }
 }
 
-// 操作列统一图标按钮（背景一色、图标一色，与"前往"同风格）
+// 应用磁贴用到的图标路径
 const ICONS = {
-  go: 'M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z',
   play: 'M8 5v14l11-7z',
   stop: 'M6 6h12v12H6z',
   gear: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
   trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
 };
-
-function makeIconBtn(icon, title, onClick) {
-  const btn = document.createElement('button');
-  btn.className = 'icon-btn';
-  btn.title = title;
-  btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="${ICONS[icon]}"/></svg>`;
-  btn.addEventListener('click', onClick);
-  return btn;
-}
 
 function gearSvg(size) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true"><path d="${ICONS.gear}"/></svg>`;
@@ -1082,7 +1135,7 @@ function renderApps(apps = lastApps, shortcuts = lastShortcuts) {
   }
 }
 
-// 桌面快捷方式磁贴（不是真实应用）：点击打开对应程序并跳到控制桌面页
+// 桌面快捷方式磁贴（不是真实应用）：点击打开对应程序（explorer 启动 .lnk）
 const SHORTCUT_BADGE =
   'M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7H5V5z';
 
@@ -1126,14 +1179,14 @@ function buildShortcutTile(sc) {
   name.textContent = sc.name;
   tile.appendChild(name);
 
-  tile.addEventListener('click', async () => {
+  onActivate(tile, async () => {
     try {
       await call('shortcuts.launch', { id: sc.id });
       toast('已启动「' + sc.name + '」');
     } catch (err) {
       toast(err.message, true);
     }
-  });
+  }, sc.name);
   return tile;
 }
 
@@ -1187,7 +1240,7 @@ function buildTile(app) {
   name.textContent = app.name;
   tile.appendChild(name);
 
-  tile.addEventListener('click', () => {
+  onActivate(tile, () => {
     if (!app.running) {
       // 未运行：点击启动
       call('apps.start', { id: app.id })
@@ -1201,7 +1254,7 @@ function buildTile(app) {
     } else {
       openAppSettings(app);
     }
-  });
+  }, app.name);
   return tile;
 }
 
@@ -1230,9 +1283,7 @@ function buildInstallingTile(id, meta) {
   name.textContent = meta.name || id;
   tile.appendChild(name);
 
-  tile.addEventListener('click', () =>
-    openInfo('安装中', `应用「${meta.name || id}」正在安装，请稍候…`)
-  );
+  onActivate(tile, () => openInfo('安装中', `应用「${meta.name || id}」正在安装，请稍候…`), meta.name || id);
   return tile;
 }
 
@@ -1294,76 +1345,6 @@ function renderMarkdown(md) {
   return html;
 }
 
-// ---------- 反向代理 ----------
-
-async function loadProxyView() {
-  renderCrumbs(document.getElementById('crumbsProxy'), [
-    { label: '选项', click: () => switchView('settings') },
-    { label: '反向代理', current: true },
-  ]);
-  try {
-    renderProxies(await call('proxy.list'));
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-
-function renderProxies(rules) {
-  const ul = document.getElementById('proxyList');
-  ul.innerHTML = '';
-  const manual = rules.filter((r) => !r.app);
-  const appRules = rules.filter((r) => r.app);
-
-  if (!rules.length) {
-    const li = document.createElement('li');
-    li.className = 'proxy-empty';
-    li.textContent = '暂无代理规则';
-    ul.appendChild(li);
-    return;
-  }
-
-  for (const rule of manual) {
-    const li = document.createElement('li');
-    li.className = 'proxy-item';
-
-    const route = document.createElement('div');
-    route.className = 'proxy-route';
-    const pathEl = document.createElement('b');
-    pathEl.textContent = rule.path;
-    route.appendChild(pathEl);
-    route.appendChild(document.createTextNode(` → 127.0.0.1:${rule.port}`));
-
-    const actions = document.createElement('div');
-    actions.className = 'proxy-actions';
-    actions.appendChild(
-      makeIconBtn('go', `前往 ${rule.path}/`, () => window.open(rule.path + '/', '_blank'))
-    );
-    actions.appendChild(
-      makeIconBtn('trash', '删除', async () => {
-        try {
-          await call('proxy.remove', { path: rule.path });
-          toast(`已删除 ${rule.path}`);
-          renderProxies(await call('proxy.list'));
-        } catch (err) {
-          toast(err.message, true);
-        }
-      })
-    );
-    li.append(route, actions);
-    ul.appendChild(li);
-  }
-
-  // 应用的代理不逐条展示，汇总为一条，点击跳转到应用页管理
-  if (appRules.length) {
-    const li = document.createElement('li');
-    li.className = 'proxy-item app-proxy-row';
-    li.textContent = `应用的代理（${appRules.length}）`;
-    li.title = '前往应用页管理';
-    li.addEventListener('click', () => switchView('apps'));
-    ul.appendChild(li);
-  }
-}
-
 // ---------- 工具 ----------
 
 function toast(msg, isError = false) {
@@ -1411,6 +1392,21 @@ function closeModal() {
   document.getElementById('modalOverlay').classList.add('hidden');
 }
 
+// 键盘可达：给可点击的非按钮元素（li/div）补 role/tabindex，并让 Enter/Space 与点击等价
+function onActivate(el, handler, label) {
+  el.setAttribute('role', 'button');
+  el.tabIndex = 0;
+  if (label) el.setAttribute('aria-label', label);
+  el.addEventListener('click', handler);
+  el.addEventListener('keydown', (e) => {
+    if (e.target !== el) return; // 内部按钮（磁贴齿轮、行内操作按钮）的按键冒泡到这里要忽略
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handler();
+    }
+  });
+}
+
 // ---------- 事件绑定 ----------
 
 // 侧边栏入口（内置 + 应用）动态渲染，用事件委托
@@ -1421,17 +1417,14 @@ document.getElementById('navList').addEventListener('click', (e) => {
   else switchView(btn.dataset.view);
 });
 
-// 列表页条目（功能>反向代理、选项>安全设置、安全设置>访问码）与面包屑跳转
+// 列表页条目跳转（选项>个性化设置/安全设置/存储设置、安全设置>访问码、存储设置>存储位置 等）
 document.querySelectorAll('.menu-item[data-goto]').forEach((li) =>
-  li.addEventListener('click', () => switchView(li.dataset.goto))
-);
-document.querySelectorAll('.crumb').forEach((b) =>
-  b.addEventListener('click', () => switchView(b.dataset.view))
+  onActivate(li, () => switchView(li.dataset.goto))
 );
 
 // 重启葡萄云：确认弹窗 -> 发送重启指令，服务端拉起助手完成停+启
 document.querySelectorAll('.menu-item[data-action]').forEach((li) =>
-  li.addEventListener('click', () => {
+  onActivate(li, () => {
     if (li.dataset.action === 'restart') openModal('modalConfirm');
   })
 );
@@ -1619,7 +1612,10 @@ document.getElementById('appStartStopBtn').addEventListener('click', async () =>
 });
 document.getElementById('appUninstallBtn').addEventListener('click', async () => {
   if (!settingsAppId) return;
-  if (!confirm(`确定卸载应用「${settingsAppId}」？将先运行停止程序，然后删除应用包。`)) return;
+  // 确认文案里显示应用名，取不到时退回 id
+  const app = appsList.find((a) => a.id === settingsAppId);
+  const appName = (app && app.name) || settingsAppId;
+  if (!confirm(`确定卸载应用「${appName}」？将先停止应用进程，然后删除应用包。`)) return;
   try {
     await call('apps.remove', { id: settingsAppId });
     toast('应用已卸载');
@@ -1632,37 +1628,12 @@ document.getElementById('appUninstallBtn').addEventListener('click', async () =>
 document.getElementById('appSettingsCloseBtn').addEventListener('click', closeModal);
 document.getElementById('infoOkBtn').addEventListener('click', closeModal);
 
-document.getElementById('openProxyModal').addEventListener('click', () => {
-  document.getElementById('addProxyForm').reset();
-  openModal('modalProxy');
-  document.getElementById('proxyPath').focus();
-});
-
-document.getElementById('proxyCancelBtn').addEventListener('click', closeModal);
-
-document.getElementById('appViewClose').addEventListener('click', closeModal);
-
 document.getElementById('modalOverlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
 });
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
-});
-
-document.getElementById('addProxyForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const path = document.getElementById('proxyPath').value.trim();
-  const port = Number(document.getElementById('proxyPort').value);
-  try {
-    await call('proxy.add', { path, port });
-    toast('代理规则已添加');
-    closeModal();
-    e.target.reset();
-    renderProxies(await call('proxy.list'));
-  } catch (err) {
-    toast(err.message, true);
-  }
 });
 
 document.getElementById('clearLogs').addEventListener('click', async () => {

@@ -69,7 +69,7 @@
         <div class="crumbs" id="crumbsStoragesettings"></div>
       </div>
       <ul class="menu-list">
-        <li class="menu-item" data-goto="storagelocation"><span>存储位置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="storagelocation"><span>存储位置</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
@@ -113,10 +113,10 @@
         <h2>选项</h2>
       </div>
       <ul class="menu-list">
-        <li class="menu-item menu-item-danger" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
-        <li class="menu-item" data-goto="personalization"><span>个性化设置</span><span class="menu-arrow">›</span></li>
-        <li class="menu-item" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
-        <li class="menu-item" data-goto="storagesettings"><span>存储设置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item menu-item-danger" role="button" tabindex="0" data-action="restart"><span>重启葡萄云</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="personalization"><span>个性化设置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="security"><span>安全设置</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="storagesettings"><span>存储设置</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
@@ -126,7 +126,7 @@
         <div class="crumbs" id="crumbsPersonalization"></div>
       </div>
       <ul class="menu-list">
-        <li class="menu-item" data-goto="themecolor"><span>页面颜色</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="themecolor"><span>页面颜色</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
@@ -151,7 +151,7 @@
         <div class="crumbs" id="crumbsSecurity"></div>
       </div>
       <ul class="menu-list">
-        <li class="menu-item" data-goto="accesscode"><span>访问码</span><span class="menu-arrow">›</span></li>
+        <li class="menu-item" role="button" tabindex="0" data-goto="accesscode"><span>访问码</span><span class="menu-arrow">›</span></li>
       </ul>
     </section>
 
@@ -177,15 +177,6 @@
       </div>
     </section>
 
-    <!-- 反向代理 -->
-    <section id="view-proxy" class="view hidden">
-      <div class="view-header">
-        <div class="crumbs" id="crumbsProxy"></div>
-        <button id="openProxyModal" class="btn primary small">+ 添加规则</button>
-      </div>
-      <p class="muted page-desc">将本机（localhost）指定端口的 Web 服务代理到子路径，WebSocket 同步映射，页面内的绝对路径资源与前端路由会自动适配。</p>
-      <ul id="proxyList" class="proxy-list"></ul>
-    </section>
   </main>
 </div>
 <div class="nav-mask" id="navMask"></div>
@@ -284,22 +275,6 @@
     </div>
   </div>
 
-  <!-- 弹窗：添加反向代理规则 -->
-  <div class="modal hidden" id="modalProxy">
-    <h3>添加反向代理规则</h3>
-    <form id="addProxyForm" class="form proxy-form">
-      <label>子路径
-        <input id="proxyPath" type="text" placeholder="/web" autocomplete="off" required>
-      </label>
-      <label>目标端口
-        <input id="proxyPort" type="number" min="1" max="65535" placeholder="80" required>
-      </label>
-      <div class="form-actions">
-        <button class="btn primary" type="submit">添加规则</button>
-        <button class="btn" type="button" id="proxyCancelBtn">取消</button>
-      </div>
-    </form>
-  </div>
   <!-- 弹窗：重启确认 -->
   <div class="modal hidden" id="modalConfirm">
     <h3>重启葡萄云</h3>
@@ -307,19 +282,6 @@
     <div class="form-actions">
       <button class="btn danger" id="confirmOkBtn">确定重启</button>
       <button class="btn" id="confirmCancelBtn">取消</button>
-    </div>
-  </div>
-
-  <!-- 弹窗：应用窗口查看（快捷方式启动后实时采集） -->
-  <div class="modal hidden" id="modalAppView">
-    <div class="app-view-head">
-      <h3 id="appViewTitle">应用</h3>
-      <span id="appViewStatus" class="app-view-status">启动中…</span>
-      <button class="btn" id="appViewClose" type="button">关闭</button>
-    </div>
-    <div class="app-view-stage">
-      <canvas id="appViewCanvas" title="点击进入控制桌面"></canvas>
-      <div id="appViewHint" class="app-view-hint">启动中…</div>
     </div>
   </div>
 </div>
