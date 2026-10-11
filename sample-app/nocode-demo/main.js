@@ -31,8 +31,15 @@ function sendJson(res, status, obj) {
 }
 
 function handle(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const pathname = decodeURIComponent(url.pathname);
+  // 请求行里的畸形百分号编码（例如 /% ）会让 decodeURIComponent 抛 URIError。
+  // 这里必须自己兜住：http 的请求回调里抛出的异常是"未捕获异常"，会让整个应用进程直接退出；
+  // 而这个免访问码入口谁都能访问，等于一个请求就能把应用打崩。
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch {
+    return sendJson(res, 400, { ok: false, error: '请求路径非法' });
+  }
 
   // 后端接口：页面上的按钮会调它（相对路径 api/info）
   if (pathname === '/api/info') {
@@ -87,7 +94,8 @@ for (const [label, port] of [
 console.log(`[nocode-demo] 应用 ${process.env.GRAPENAS_APP_ID || CONF.id} 已启动 (PID ${process.pid})`);
 console.log(`[nocode-demo] 免访问码地址 /nocode/${CONF.id}/ ，需要访问码的地址 /${CONF.id}/`);
 
-// main.js 退出即应用停止：收到停止信号时先关端口再退出
+// main.js 退出即应用停止。注意：葡萄云在 Windows 下用 taskkill /F 硬杀进程，
+// 收不到 SIGINT/SIGTERM，所以这段收尾只在 Unix、或手动 Ctrl+C 调试时才会执行。
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
     console.log(`[nocode-demo] 收到 ${sig}，正在关闭…`);
